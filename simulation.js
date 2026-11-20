@@ -116,8 +116,8 @@ function makeVehicleMesh(kind, bodyColor) {
     opacity: 0.62,
   });
   const wheelMat = new THREE.MeshStandardMaterial({ map: WHEEL_TEX, roughness: 0.85 });
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xfff6d6, emissive: 0xffe8a3, emissiveIntensity: 0.25 });
-  const brakeMat = new THREE.MeshStandardMaterial({ color: 0x991515, emissive: 0xff1e1e, emissiveIntensity: 0.25 });
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xfffaf0, emissive: 0xfff2cc, emissiveIntensity: 0.2 });
+  const brakeMat = new THREE.MeshStandardMaterial({ color: 0x991515, emissive: 0xff1e1e, emissiveIntensity: 0.2 });
   const driverHeadMat = new THREE.MeshStandardMaterial({ map: FACE_TEX, roughness: 0.75 });
   const driverShirtMat = new THREE.MeshStandardMaterial({ color: 0x3b6fa8, roughness: 0.85 });
 
@@ -211,7 +211,55 @@ function makeVehicleMesh(kind, bodyColor) {
   return { group, headMat, brakeMat, snowGroup };
 }
 
-export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, packCol = 0x2a66c2, hairCol = 0x4a3525) {
+// Shared winter clothing geometries & materials (tuques, scarves, mittens, boots, parka trim)
+const WINTER_KNIT_COLORS = [
+  0xc82828, // festive Quebec red
+  0x1e3a6d, // deep winter navy
+  0x1f6b3b, // forest green
+  0x7c1d32, // burgundy
+  0xd49b24, // warm mustard
+  0xf2ead7, // cozy cream
+];
+const WINTER_PARKA_COLORS = [
+  0x1c3557, // deep navy parka
+  0xa62626, // crimson winter parka
+  0x224d36, // forest pine parka
+  0x2d343e, // charcoal puffer
+  0x6b2030, // burgundy winter coat
+  0xb87d1e, // ochre/mustard parka
+  0x265463, // winter slate-teal parka
+  0xc7bfb2, // warm winter cream-taupe parka
+];
+const WINTER_KNIT_MATS = WINTER_KNIT_COLORS.map(
+  (col) => new THREE.MeshStandardMaterial({ color: col, roughness: 0.92, metalness: 0.0 })
+);
+const WINTER_CREAM_MAT = new THREE.MeshStandardMaterial({ color: 0xf5f0e4, roughness: 0.94, metalness: 0.0 });
+const WINTER_BOOT_SOLE_MAT = new THREE.MeshStandardMaterial({ color: 0x241f1c, roughness: 0.92 });
+const WINTER_BOOT_UPPER_MAT = new THREE.MeshStandardMaterial({ color: 0x5c3e26, roughness: 0.88 });
+
+const TUQUE_CUFF_GEO = new THREE.BoxGeometry(0.36, 0.085, 0.36);
+const TUQUE_DOME_GEO = new THREE.BoxGeometry(0.33, 0.13, 0.33);
+const TUQUE_CROWN_GEO = new THREE.BoxGeometry(0.25, 0.07, 0.25);
+const TUQUE_POM_GEO = new THREE.BoxGeometry(0.11, 0.11, 0.11);
+const SCARF_WRAP_GEO = new THREE.BoxGeometry(0.34, 0.095, 0.44);
+const SCARF_TAIL_GEO = new THREE.BoxGeometry(0.06, 0.26, 0.11);
+const SCARF_FRINGE_GEO = new THREE.BoxGeometry(0.062, 0.04, 0.112);
+const PARKA_HEM_GEO = new THREE.BoxGeometry(0.32, 0.11, 0.44);
+const MITTEN_MAIN_GEO = new THREE.BoxGeometry(0.165, 0.16, 0.165);
+const MITTEN_THUMB_GEO = new THREE.BoxGeometry(0.06, 0.06, 0.05);
+const MITTEN_CUFF_GEO = new THREE.BoxGeometry(0.175, 0.045, 0.175);
+const BOOT_SOLE_GEO = new THREE.BoxGeometry(0.25, 0.14, 0.215);
+const BOOT_SHAFT_GEO = new THREE.BoxGeometry(0.21, 0.13, 0.21);
+const BOOT_CUFF_GEO = new THREE.BoxGeometry(0.22, 0.045, 0.22);
+
+export function makePedestrianMesh(
+  shirtCol,
+  pantsCol,
+  hasBackpack = false,
+  packCol = 0x2a66c2,
+  hairCol = 0x4a3525,
+  winterStyleIdx = null
+) {
   const root = new THREE.Group();
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xebbfa4, roughness: 0.78 });
   const faceMat = new THREE.MeshStandardMaterial({ map: FACE_TEX, roughness: 0.78 });
@@ -219,6 +267,13 @@ export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, pack
   const shirtMat = new THREE.MeshStandardMaterial({ map: SHIRT_TEX, color: shirtCol, roughness: 0.82 });
   const pantsMat = new THREE.MeshStandardMaterial({ map: JEANS_TEX, color: pantsCol, roughness: 0.88 });
   const shoeMat = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.9 });
+
+  const styleSeed = winterStyleIdx !== null ? winterStyleIdx : Math.abs((shirtCol ^ (pantsCol >> 4)) % 100);
+  const tuqueMat = WINTER_KNIT_MATS[styleSeed % WINTER_KNIT_MATS.length];
+  const cuffMat = styleSeed % 2 === 0 ? WINTER_CREAM_MAT : WINTER_KNIT_MATS[(styleSeed + 2) % WINTER_KNIT_MATS.length];
+  const scarfMat = WINTER_KNIT_MATS[(styleSeed + 3) % WINTER_KNIT_MATS.length];
+  const mittenMat = WINTER_KNIT_MATS[(styleSeed + 1) % WINTER_KNIT_MATS.length];
+  const parkaCol = WINTER_PARKA_COLORS[styleSeed % WINTER_PARKA_COLORS.length];
 
   // Sharpened Minecraft-style proportions with hands, shoes & collar
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.56, 0.40), shirtMat);
@@ -236,13 +291,68 @@ export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, pack
   head.position.y = 1.49;
   head.castShadow = true;
 
+  // Winter gear on head & torso (tuque/beanie + scarf + padded parka hem)
+  const winterGearGroup = new THREE.Group();
+  winterGearGroup.visible = false;
+
+  const tuqueCuff = new THREE.Mesh(TUQUE_CUFF_GEO, cuffMat);
+  tuqueCuff.position.set(0, 1.625, 0);
+  tuqueCuff.castShadow = true;
+  const tuqueDome = new THREE.Mesh(TUQUE_DOME_GEO, tuqueMat);
+  tuqueDome.position.set(0, 1.715, 0);
+  tuqueDome.castShadow = true;
+  const tuqueCrown = new THREE.Mesh(TUQUE_CROWN_GEO, tuqueMat);
+  tuqueCrown.position.set(0, 1.795, 0);
+  const tuquePom = new THREE.Mesh(TUQUE_POM_GEO, WINTER_CREAM_MAT);
+  tuquePom.position.set(0, 1.875, 0);
+
+  const scarfWrap = new THREE.Mesh(SCARF_WRAP_GEO, scarfMat);
+  scarfWrap.position.set(0.01, 1.335, 0);
+  scarfWrap.castShadow = true;
+  const scarfTail = new THREE.Mesh(SCARF_TAIL_GEO, scarfMat);
+  scarfTail.position.set(0.175, 1.18, 0.07);
+  const scarfFringe = new THREE.Mesh(SCARF_FRINGE_GEO, WINTER_CREAM_MAT);
+  scarfFringe.position.set(0.175, 1.035, 0.07);
+
+  const parkaHem = new THREE.Mesh(PARKA_HEM_GEO, shirtMat);
+  parkaHem.position.set(0, 0.79, 0);
+
+  winterGearGroup.add(tuqueCuff, tuqueDome, tuqueCrown, tuquePom, scarfWrap, scarfTail, scarfFringe, parkaHem);
+
+  const makeBootGroup = () => {
+    const bg = new THREE.Group();
+    bg.visible = false;
+    const sole = new THREE.Mesh(BOOT_SOLE_GEO, WINTER_BOOT_SOLE_MAT);
+    sole.position.set(0.025, -0.56, 0);
+    const shaft = new THREE.Mesh(BOOT_SHAFT_GEO, WINTER_BOOT_UPPER_MAT);
+    shaft.position.set(0, -0.45, 0);
+    const fleeceCuff = new THREE.Mesh(BOOT_CUFF_GEO, WINTER_CREAM_MAT);
+    fleeceCuff.position.set(0, -0.375, 0);
+    bg.add(sole, shaft, fleeceCuff);
+    return bg;
+  };
+
+  const makeMittenGroup = (sideSign) => {
+    const mg = new THREE.Group();
+    mg.visible = false;
+    const main = new THREE.Mesh(MITTEN_MAIN_GEO, mittenMat);
+    main.position.set(0, -0.44, 0);
+    const thumb = new THREE.Mesh(MITTEN_THUMB_GEO, mittenMat);
+    thumb.position.set(0.08, -0.42, sideSign * 0.06);
+    const cuff = new THREE.Mesh(MITTEN_CUFF_GEO, WINTER_CREAM_MAT);
+    cuff.position.set(0, -0.355, 0);
+    mg.add(main, thumb, cuff);
+    return mg;
+  };
+
   const legL = new THREE.Group();
   legL.position.set(0, 0.76, -0.10);
   const pantL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.50, 0.18), pantsMat);
   pantL.position.y = -0.25;
   const shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.13, 0.19), shoeMat);
   shoeL.position.set(0.02, -0.56, 0);
-  legL.add(pantL, shoeL);
+  const bootL = makeBootGroup();
+  legL.add(pantL, shoeL, bootL);
 
   const legR = new THREE.Group();
   legR.position.set(0, 0.76, 0.10);
@@ -250,7 +360,8 @@ export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, pack
   pantR.position.y = -0.25;
   const shoeR = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.13, 0.19), shoeMat);
   shoeR.position.set(0.02, -0.56, 0);
-  legR.add(pantR, shoeR);
+  const bootR = makeBootGroup();
+  legR.add(pantR, shoeR, bootR);
 
   const armL = new THREE.Group();
   armL.position.set(0, 1.28, -0.28);
@@ -258,7 +369,8 @@ export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, pack
   sleeveL.position.y = -0.17;
   const handL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), skinMat);
   handL.position.y = -0.44;
-  armL.add(sleeveL, handL);
+  const mittenL = makeMittenGroup(1);
+  armL.add(sleeveL, handL, mittenL);
 
   const armR = new THREE.Group();
   armR.position.set(0, 1.28, 0.28);
@@ -266,9 +378,10 @@ export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, pack
   sleeveR.position.y = -0.17;
   const handR = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.14), skinMat);
   handR.position.y = -0.44;
-  armR.add(sleeveR, handR);
+  const mittenR = makeMittenGroup(-1);
+  armR.add(sleeveR, handR, mittenR);
 
-  root.add(torso, head, legL, legR, armL, armR);
+  root.add(torso, head, winterGearGroup, legL, legR, armL, armR);
   if (hasBackpack) {
     const pack = new THREE.Mesh(
       new THREE.BoxGeometry(0.18, 0.38, 0.30),
@@ -281,7 +394,32 @@ export function makePedestrianMesh(shirtCol, pantsCol, hasBackpack = false, pack
     strapR.position.z = 0.12;
     root.add(pack, strapL, strapR);
   }
-  return { root, legL, legR, armL, armR };
+
+  function setWinterMode(isWinter) {
+    const active = !!isWinter;
+    winterGearGroup.visible = active;
+    bootL.visible = active;
+    bootR.visible = active;
+    shoeL.visible = !active;
+    shoeR.visible = !active;
+    mittenL.visible = active;
+    mittenR.visible = active;
+    handL.visible = !active;
+    handR.visible = !active;
+    shirtMat.color.setHex(active ? parkaCol : shirtCol);
+  }
+
+  return { root, legL, legR, armL, armR, winterGearGroup, setWinterMode };
+}
+
+export function createPlayerCharacter(
+  shirtCol = 0xd93838,
+  pantsCol = 0x243b5c,
+  hasBackpack = true,
+  packCol = 0x2b6cb0,
+  hairCol = 0x4a3525
+) {
+  return makePedestrianMesh(shirtCol, pantsCol, hasBackpack, packCol, hairCol, 0);
 }
 
 function makeDogMesh(furColor = 0xb8844c) {
@@ -713,7 +851,9 @@ export function createSimulation(scene, DATA, obstacles = null) {
       shirtCols[i % shirtCols.length],
       pantsCols[i % pantsCols.length],
       isChild && role !== 'player',
-      shirtCols[(i + 3) % shirtCols.length]
+      shirtCols[(i + 3) % shirtCols.length],
+      0x4a3525,
+      i
     );
     if (isChild) pMesh.root.scale.setScalar(0.82);
 
@@ -982,8 +1122,12 @@ export function createSimulation(scene, DATA, obstacles = null) {
       v.mesh.rotation.y = -Math.atan2(ce.uz, ce.ux);
       v.mesh.rotation.z = pitch;
 
-      v.headMat.emissiveIntensity = 0.25 + nightFactor * 2.2;
-      v.brakeMat.emissiveIntensity = v.braking ? 2.4 : 0.25 + nightFactor * 0.7;
+      const nf =
+        typeof nightFactor === 'boolean'
+          ? nightFactor ? 1 : 0
+          : Math.max(0, Math.min(1, Number(nightFactor) || 0));
+      v.headMat.emissiveIntensity = 0.2 + nf * 1.55;
+      v.brakeMat.emissiveIntensity = v.braking ? 2.2 + nf * 0.4 : 0.2 + nf * 1.15;
     }
   }
 
@@ -1005,6 +1149,9 @@ export function createSimulation(scene, DATA, obstacles = null) {
     const active = !!isWinter;
     for (const v of vehicles) {
       if (v.snowGroup) v.snowGroup.visible = active;
+    }
+    for (const p of peds) {
+      if (p.setWinterMode) p.setWinterMode(active);
     }
   }
 

@@ -13,6 +13,11 @@ import {
 
 const heroWinterHandlers = [];
 const heroChristmasGroups = [];
+const heroNightHandlers = [];
+const heroChimneyTops = [];
+let heroSmokeGroup = null;
+const heroSmokePuffs = [];
+let heroSmokeGeo = null;
 
 function registerHeroMaterialSwap(mat, summerProps, winterProps) {
   heroWinterHandlers.push((isWinter) => {
@@ -36,6 +41,149 @@ function registerHeroMaterialSwap(mat, summerProps, winterProps) {
   });
 }
 
+function registerHeroNightHandler(fn) {
+  heroNightHandlers.push(fn);
+}
+
+function registerHeroWindowMaterial(mat, texLib, nightIntensity = 0.72, nightColor = 0xffb84d) {
+  const dayMap = mat.map || null;
+  const dayColor = mat.color ? mat.color.getHex() : 0xffffff;
+  const dayEmissive = mat.emissive ? mat.emissive.getHex() : 0x000000;
+  const dayEmissiveIntensity = mat.emissiveIntensity || 0;
+  const usesWindowTex = !!(texLib?.windowTex && dayMap === texLib.windowTex);
+  registerHeroNightHandler((isNight) => {
+    if (isNight) {
+      if (usesWindowTex && texLib?.windowLitTex) {
+        if (mat.map !== texLib.windowLitTex) {
+          mat.map = texLib.windowLitTex;
+          mat.needsUpdate = true;
+        }
+      }
+      mat.emissive.setHex(nightColor);
+      mat.emissiveIntensity = nightIntensity;
+    } else {
+      if (mat.map !== dayMap) {
+        mat.map = dayMap;
+        mat.needsUpdate = true;
+      }
+      if (mat.color) mat.color.setHex(dayColor);
+      mat.emissive.setHex(dayEmissive);
+      mat.emissiveIntensity = dayEmissiveIntensity;
+    }
+  });
+}
+
+function registerHeroGlowMaterial(mat, dayIntensity, nightIntensity, nightColor = null) {
+  const dayColor = mat.emissive ? mat.emissive.getHex() : 0xffe4a0;
+  registerHeroNightHandler((isNight) => {
+    mat.emissiveIntensity = isNight ? nightIntensity : dayIntensity;
+    if (nightColor !== null && mat.emissive) {
+      mat.emissive.setHex(isNight ? nightColor : dayColor);
+    }
+  });
+}
+
+function registerHeroSignMaterial(mat, tex, nightIntensity = 0.82, nightColor = 0xfff2d6) {
+  registerHeroNightHandler((isNight) => {
+    if (isNight) {
+      mat.emissiveMap = tex;
+      mat.emissive.setHex(nightColor);
+      mat.emissiveIntensity = nightIntensity;
+      mat.needsUpdate = true;
+    } else {
+      mat.emissiveMap = null;
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+      mat.needsUpdate = true;
+    }
+  });
+}
+
+function resetHeroSmoke(scene) {
+  heroChimneyTops.length = 0;
+  heroSmokePuffs.length = 0;
+  if (heroSmokeGroup && heroSmokeGroup.parent) {
+    heroSmokeGroup.parent.remove(heroSmokeGroup);
+  }
+  heroSmokeGroup = new THREE.Group();
+  heroSmokeGroup.visible = false;
+  if (scene) scene.add(heroSmokeGroup);
+}
+
+function registerHeroChimney(scene, parentGroup, localX, localY, localZ) {
+  parentGroup.updateMatrixWorld(true);
+  const wp = new THREE.Vector3(localX, localY, localZ).applyMatrix4(parentGroup.matrixWorld);
+  const idx = heroChimneyTops.length;
+  heroChimneyTops.push([wp.x, wp.y, wp.z]);
+
+  if (!heroSmokeGroup) {
+    heroSmokeGroup = new THREE.Group();
+    heroSmokeGroup.visible = false;
+  }
+  if (!heroSmokeGroup.parent && scene) {
+    scene.add(heroSmokeGroup);
+  }
+  if (!heroSmokeGeo) {
+    heroSmokeGeo = new THREE.BoxGeometry(0.46, 0.38, 0.46);
+  }
+
+  const puffsPerChimney = 8;
+  for (let i = 0; i < puffsPerChimney; i++) {
+    const mat = new THREE.MeshStandardMaterial({
+      color: i % 2 === 0 ? 0xeef3f8 : 0xdbe3ec,
+      transparent: true,
+      opacity: 0.45,
+      roughness: 1.0,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(heroSmokeGeo, mat);
+    mesh.position.set(wp.x, wp.y + 0.2, wp.z);
+    heroSmokeGroup.add(mesh);
+    const seed = idx * 17.3 + i * 2.71;
+    heroSmokePuffs.push({
+      mesh,
+      mat,
+      x: wp.x,
+      y: wp.y,
+      z: wp.z,
+      phase: (i / puffsPerChimney + (idx * 0.19) % 1) % 1,
+      speed: 0.19 + ((idx + i) % 3) * 0.02,
+      driftX: 1.8 + (idx % 2) * 0.45,
+      driftZ: 0.85 - (idx % 3) * 0.25,
+      seed,
+    });
+  }
+}
+
+/**
+ * Updates rising voxel smoke puffs above all hero chimneys (visible in Winter / Christmas Mode).
+ */
+export function updateHeroSmoke(dt, elapsedSec, isWinter) {
+  if (!heroSmokeGroup) return;
+  const show = !!isWinter;
+  heroSmokeGroup.visible = show;
+  if (!show) return;
+  const tSec = Number.isFinite(elapsedSec) ? elapsedSec : 0;
+  for (let i = 0; i < heroSmokePuffs.length; i++) {
+    const p = heroSmokePuffs[i];
+    const u = (tSec * p.speed + p.phase) % 1;
+    const rise = u * 5.6;
+    const curlX = Math.sin(tSec * 1.35 + p.seed) * 0.32 * u;
+    const curlZ = Math.cos(tSec * 1.1 + p.seed * 1.3) * 0.26 * u;
+    p.mesh.position.set(
+      p.x + p.driftX * u * u + curlX,
+      p.y + 0.18 + rise,
+      p.z + p.driftZ * u * u + curlZ
+    );
+    const sc = 0.48 + u * 1.45;
+    p.mesh.scale.set(sc, sc * 0.88, sc);
+    p.mesh.rotation.y = tSec * 0.45 + p.seed;
+    const fadeIn = Math.min(1, u / 0.12);
+    const fadeOut = Math.pow(1 - u, 1.25);
+    p.mat.opacity = 0.52 * fadeIn * fadeOut;
+  }
+}
+
 /**
  * Toggles Winter Mode across hero landmarks (2646 Rue des Cormiers, École de la Samare, Parc Gilles-Charland patinoire).
  */
@@ -55,8 +203,19 @@ export function setChristmasMode(isChristmas) {
   }
 }
 
+/**
+ * Toggles Night Mode across hero landmarks (warm lit windows, glowing sconces/lamps/floodlights & illuminated signs).
+ */
+export function setNightMode(isNight) {
+  const night = !!isNight;
+  for (let i = 0; i < heroNightHandlers.length; i++) {
+    heroNightHandlers[i](night);
+  }
+}
+
 const XMAS_BULB_COLORS = [0xff2b2b, 0x22dd55, 0xffd22a, 0xfff3cc, 0x2d9cff];
 let _xmasBulbMats = null;
+let _xmasSharedMats = null;
 function getXmasBulbMats() {
   if (!_xmasBulbMats) {
     _xmasBulbMats = XMAS_BULB_COLORS.map(
@@ -64,6 +223,45 @@ function getXmasBulbMats() {
     );
   }
   return _xmasBulbMats;
+}
+
+function getXmasSharedMats() {
+  if (!_xmasSharedMats) {
+    _xmasSharedMats = {
+      snow: new THREE.MeshStandardMaterial({ color: 0xf4f8fc, roughness: 0.85 }),
+      coal: new THREE.MeshStandardMaterial({ color: 0x1b1e23, roughness: 0.75 }),
+      carrot: new THREE.MeshStandardMaterial({ color: 0xf2711c, roughness: 0.6 }),
+      red: new THREE.MeshStandardMaterial({ color: 0xd61e1e, roughness: 0.45 }),
+      white: new THREE.MeshStandardMaterial({ color: 0xf8f9fa, roughness: 0.45 }),
+      pine: new THREE.MeshStandardMaterial({ color: 0x1b5e20, roughness: 0.85 }),
+      twig: new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.9 }),
+      goldGlow: new THREE.MeshStandardMaterial({
+        color: 0xffe285,
+        emissive: 0xffc438,
+        emissiveIntensity: 1.05,
+        roughness: 0.3,
+      }),
+      redGlow: new THREE.MeshStandardMaterial({
+        color: 0xff3b3b,
+        emissive: 0xff1e1e,
+        emissiveIntensity: 1.25,
+        roughness: 0.3,
+      }),
+      presentBoxes: [
+        new THREE.MeshStandardMaterial({ color: 0xd62424, roughness: 0.5 }),
+        new THREE.MeshStandardMaterial({ color: 0x1f8a42, roughness: 0.5 }),
+        new THREE.MeshStandardMaterial({ color: 0x2463c4, roughness: 0.5 }),
+        new THREE.MeshStandardMaterial({ color: 0xe6b422, roughness: 0.45 }),
+      ],
+      presentRibbons: [
+        new THREE.MeshStandardMaterial({ color: 0xffd740, roughness: 0.35 }),
+        new THREE.MeshStandardMaterial({ color: 0xe82c2c, roughness: 0.35 }),
+        new THREE.MeshStandardMaterial({ color: 0xf5f7fa, roughness: 0.35 }),
+        new THREE.MeshStandardMaterial({ color: 0xd61e1e, roughness: 0.35 }),
+      ],
+    };
+  }
+  return _xmasSharedMats;
 }
 
 function addChristmasStringLine(group, x0, y0, z0, x1, y1, z1, step = 0.65) {
@@ -83,39 +281,245 @@ function addChristmasGarland(group, x0, y0, z0, x1, y1, z1) {
   const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
   const len = Math.hypot(dx, dy, dz);
   const ang = Math.atan2(dz, dx);
-  const garlandMat = new THREE.MeshStandardMaterial({ color: 0x1b5e20, roughness: 0.85 });
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(len, 0.22, 0.22), garlandMat);
+  const sm = getXmasSharedMats();
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(len, 0.22, 0.22), sm.pine);
   bar.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
   bar.rotation.y = -ang;
   group.add(bar);
   addChristmasStringLine(group, x0, y0 - 0.06, z0, x1, y1 - 0.06, z1, 0.48);
+  // Festive red bows spaced along the pine garland
+  const bowCount = Math.max(1, Math.floor(len / 1.8));
+  for (let bi = 0; bi < bowCount; bi++) {
+    const t = (bi + 0.5) / bowCount;
+    const bow = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.18, 0.28), sm.red);
+    bow.position.set(x0 + dx * t, y0 + dy * t - 0.02, z0 + dz * t);
+    bow.rotation.y = -ang;
+    group.add(bow);
+  }
 }
 
 function addChristmasWreath(group, x, y, z, rotY = 0, texLib = null) {
   const wGroup = new THREE.Group();
   wGroup.position.set(x, y, z);
   wGroup.rotation.y = rotY;
+  const sm = getXmasSharedMats();
   const ringMat = texLib?.wreathTex
     ? new THREE.MeshStandardMaterial({ map: texLib.wreathTex, roughness: 0.75 })
-    : new THREE.MeshStandardMaterial({ color: 0x1b5e20, roughness: 0.8 });
+    : sm.pine;
   const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.08, 6, 12), ringMat);
-  const bow = new THREE.Mesh(
-    new THREE.BoxGeometry(0.18, 0.14, 0.1),
-    new THREE.MeshStandardMaterial({ color: 0xd61e1e, roughness: 0.45 })
-  );
+  const bow = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.1), sm.red);
   bow.position.set(0, -0.26, 0.04);
   wGroup.add(ring, bow);
   group.add(wGroup);
 }
 
-function addDecoratedChristmasTree(group, x, y, z, scale = 1.0) {
+function addVoxelSnowman(group, x, y, z, rotY = 0, scale = 1.0) {
+  const sm = getXmasSharedMats();
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  g.rotation.y = rotY;
+  g.scale.setScalar(scale);
+
+  // 3-tier white snow body
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.68, 0.82), sm.snow);
+  base.position.y = 0.34;
+  base.castShadow = true;
+  const mid = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.54, 0.62), sm.snow);
+  mid.position.y = 0.92;
+  mid.castShadow = true;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.44, 0.44), sm.snow);
+  head.position.y = 1.38;
+  head.castShadow = true;
+  g.add(base, mid, head);
+
+  // Red scarf around neck + hanging tail
+  const scarfNeck = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.12, 0.50), sm.red);
+  scarfNeck.position.y = 1.18;
+  const scarfTail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.36, 0.09), sm.red);
+  scarfTail.position.set(0.16, 0.98, 0.30);
+  g.add(scarfNeck, scarfTail);
+
+  // Carrot nose, coal eyes & buttons (facing +Z)
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.30), sm.carrot);
+  nose.position.set(0, 1.38, 0.32);
+  g.add(nose);
+  for (const ex of [-0.11, 0.11]) {
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.06), sm.coal);
+    eye.position.set(ex, 1.46, 0.22);
+    g.add(eye);
+  }
+  for (const by of [0.80, 0.96, 1.08]) {
+    const btn = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.06), sm.coal);
+    btn.position.set(0, by, 0.32);
+    g.add(btn);
+  }
+
+  // Black top hat with red ribbon band
+  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.07, 0.62), sm.coal);
+  brim.position.y = 1.62;
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.08, 0.40), sm.red);
+  band.position.y = 1.69;
+  const crown = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.32, 0.38), sm.coal);
+  crown.position.y = 1.88;
+  g.add(brim, band, crown);
+
+  // Twig arms
+  for (const sgn of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.07, 0.07), sm.twig);
+    arm.position.set(sgn * 0.50, 1.00, 0);
+    arm.rotation.z = sgn * 0.32;
+    g.add(arm);
+  }
+
+  group.add(g);
+}
+
+function addCandyCane(group, x, y, z, rotY = 0, scale = 1.0) {
+  const sm = getXmasSharedMats();
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  g.rotation.y = rotY;
+  g.scale.setScalar(scale);
+
+  // Vertical red-and-white striped shaft
+  const segH = 0.22;
+  for (let i = 0; i < 6; i++) {
+    const seg = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, segH, 0.16),
+      i % 2 === 0 ? sm.red : sm.white
+    );
+    seg.position.set(0, segH * 0.5 + i * segH, 0);
+    seg.castShadow = true;
+    g.add(seg);
+  }
+  // Curved voxel hook at top
+  const hookCoords = [
+    [0.08, 1.44, 0, true],
+    [0.24, 1.54, 0, false],
+    [0.40, 1.44, 0, true],
+    [0.44, 1.26, 0, false],
+  ];
+  for (const [hx, hy, hz, isRed] of hookCoords) {
+    const hSeg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.16), isRed ? sm.red : sm.white);
+    hSeg.position.set(hx, hy, hz);
+    g.add(hSeg);
+  }
+  group.add(g);
+}
+
+function addPresentBoxes(group, x, y, z, count = 4, rotY = 0) {
+  const sm = getXmasSharedMats();
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  g.rotation.y = rotY;
+  const specs = [
+    [0.62, 0.44, 0.52, -0.78, 0.55, 0.2],
+    [0.48, 0.54, 0.48, 0.72, 0.48, -0.35],
+    [0.56, 0.36, 0.56, 0.12, 0.92, 0.15],
+    [0.44, 0.42, 0.44, -0.45, -0.72, 0.4],
+    [0.52, 0.48, 0.42, 0.65, -0.62, -0.2],
+  ];
+  const n = Math.min(count, specs.length);
+  for (let i = 0; i < n; i++) {
+    const [w, h, d, px, pz, ry] = specs[i];
+    const boxGrp = new THREE.Group();
+    boxGrp.position.set(px, h * 0.5, pz);
+    boxGrp.rotation.y = ry;
+    const bMat = sm.presentBoxes[i % sm.presentBoxes.length];
+    const rMat = sm.presentRibbons[i % sm.presentRibbons.length];
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), bMat);
+    body.castShadow = true;
+    const ribA = new THREE.Mesh(new THREE.BoxGeometry(w + 0.03, h + 0.03, 0.09), rMat);
+    const ribB = new THREE.Mesh(new THREE.BoxGeometry(0.09, h + 0.03, d + 0.03), rMat);
+    const bow = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.18), rMat);
+    bow.position.y = h * 0.5 + 0.06;
+    boxGrp.add(body, ribA, ribB, bow);
+    g.add(boxGrp);
+  }
+  group.add(g);
+}
+
+function addGlowingLawnStar(group, x, y, z, rotY = 0, scale = 1.0) {
+  const sm = getXmasSharedMats();
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  g.rotation.y = rotY;
+  g.scale.setScalar(scale);
+
+  const stake = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.05, 0.08), sm.coal);
+  stake.position.y = 0.52;
+  const vBar = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.05, 0.10), sm.goldGlow);
+  vBar.position.y = 1.35;
+  const hBar = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.16, 0.10), sm.goldGlow);
+  hBar.position.y = 1.35;
+  const dBar1 = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.14, 0.10), sm.goldGlow);
+  dBar1.position.y = 1.35;
+  dBar1.rotation.z = Math.PI / 4;
+  const dBar2 = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.14, 0.10), sm.goldGlow);
+  dBar2.position.y = 1.35;
+  dBar2.rotation.z = -Math.PI / 4;
+  g.add(stake, vBar, hBar, dBar1, dBar2);
+  group.add(g);
+}
+
+function addGlowingReindeer(group, x, y, z, rotY = 0, scale = 1.0) {
+  const sm = getXmasSharedMats();
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  g.rotation.y = rotY;
+  g.scale.setScalar(scale);
+
+  // Glowing warm-gold voxel reindeer silhouette (facing +Z)
+  for (const [lx, lz] of [[-0.18, 0.36], [0.18, 0.36], [-0.18, -0.36], [0.18, -0.36]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.72, 0.09), sm.goldGlow);
+    leg.position.set(lx, 0.36, lz);
+    g.add(leg);
+  }
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, 0.96), sm.goldGlow);
+  body.position.set(0, 0.84, 0);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.16, 0.12), sm.goldGlow);
+  tail.position.set(0, 0.96, -0.52);
+  const neck = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.48, 0.22), sm.goldGlow);
+  neck.position.set(0, 1.18, 0.40);
+  neck.rotation.x = 0.25;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.22, 0.38), sm.goldGlow);
+  head.position.set(0, 1.46, 0.56);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.11, 0.11), sm.redGlow);
+  nose.position.set(0, 1.46, 0.78);
+  g.add(body, tail, neck, head, nose);
+  for (const sgn of [-1, 1]) {
+    const antlerMain = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.38, 0.06), sm.goldGlow);
+    antlerMain.position.set(sgn * 0.16, 1.72, 0.48);
+    antlerMain.rotation.z = -sgn * 0.35;
+    const antlerTip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.22, 0.06), sm.goldGlow);
+    antlerTip.position.set(sgn * 0.24, 1.82, 0.54);
+    antlerTip.rotation.z = sgn * 0.25;
+    g.add(antlerMain, antlerTip);
+  }
+  group.add(g);
+}
+
+function addChristmasBanner(group, x, y, z, w, h, rotY, text, texLib) {
+  const tex = texLib.makeBannerTexture(text, '#b81d24', '#ffe066', 384, 72);
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex,
+    emissive: 0xffe8b0,
+    emissiveMap: tex,
+    emissiveIntensity: 0.65,
+    roughness: 0.4,
+  });
+  const board = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.14), mat);
+  board.position.set(x, y, z);
+  board.rotation.y = rotY;
+  group.add(board);
+}
+
+function addDecoratedChristmasTree(group, x, y, z, scale = 1.0, withPresents = true) {
   const tree = new THREE.Group();
   tree.position.set(x, y, z);
   tree.scale.setScalar(scale);
-  const trunk = new THREE.Mesh(
-    new THREE.BoxGeometry(0.32, 0.8, 0.32),
-    new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.9 })
-  );
+  const sm = getXmasSharedMats();
+  const trunk = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.8, 0.32), sm.twig);
   trunk.position.y = 0.4;
   const pineMat = new THREE.MeshStandardMaterial({ color: 0x165224, roughness: 0.85 });
   const mats = getXmasBulbMats();
@@ -138,12 +542,12 @@ function addDecoratedChristmasTree(group, x, y, z, scale = 1.0) {
       tree.add(bulb);
     }
   });
-  const star = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.24, 0),
-    new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffc400, emissiveIntensity: 0.95 })
-  );
+  const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), sm.goldGlow);
   star.position.y = 4.05;
   tree.add(trunk, star);
+  if (withPresents) {
+    addPresentBoxes(tree, 0, 0, 0, 4, 0.3);
+  }
   group.add(tree);
 }
 
@@ -285,6 +689,8 @@ function addSoccerGoal(group, x, z, rotY, elev = 0) {
 export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) {
   heroWinterHandlers.length = 0;
   heroChristmasGroups.length = 0;
+  heroNightHandlers.length = 0;
+  resetHeroSmoke(scene);
   const elevData = getElevData(elevDataArg);
   const elev = sampleElevation(b2646.obbCx, b2646.obbCz, elevData);
 
@@ -318,11 +724,13 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     roughness: 0.25,
     metalness: 0.22,
   });
+  registerHeroWindowMaterial(windowMat, texLib, 0.72, 0xffb84d);
   const glassMat = new THREE.MeshStandardMaterial({
     color: 0x26394a,
     roughness: 0.15,
     metalness: 0.45,
   });
+  registerHeroWindowMaterial(glassMat, texLib, 0.62, 0xffb84d);
   const snowCarCapMat = new THREE.MeshStandardMaterial({
     color: 0x3a4048,
     roughness: 0.45,
@@ -362,6 +770,22 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   mainGables.position.set(0, 0.42 + mainH, -1.7);
   mainGables.castShadow = true;
   root.add(mainGables);
+
+  // Brick chimney on 2646 rear/side ridge + concrete cap & flue pot
+  const chim2646BrickMat = new THREE.MeshStandardMaterial({
+    map: texLib.brickTextures[3] || texLib.brickTextures[0],
+    color: 0xa64d3a,
+    roughness: 0.86,
+  });
+  const chim2646 = makeWorldBox(0.84, 2.3, 0.84, chim2646BrickMat, 1.8);
+  chim2646.position.set(-1.2, 7.6, -4.4);
+  chim2646.castShadow = true;
+  const chim2646Cap = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.14, 0.98), concreteMat);
+  chim2646Cap.position.set(-1.2, 8.82, -4.4);
+  const chim2646Flue = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 0.42), darkTrimMat);
+  chim2646Flue.position.set(-1.2, 8.98, -4.4);
+  root.add(chim2646, chim2646Cap, chim2646Flue);
+  registerHeroChimney(scene, root, -1.2, 9.08, -4.4);
 
   // Right (North, -Z) projecting 2-storey front-gabled bay
   const bayD = 2.0;
@@ -704,7 +1128,8 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   );
   numPlaque.position.set(4.32, 2.25, 0.18);
   root.add(numPlaque);
-  const bulbGlowMat = new THREE.MeshStandardMaterial({ color: 0xffe4a0, emissive: 0xffb84d, emissiveIntensity: 0.9 });
+  const bulbGlowMat = new THREE.MeshStandardMaterial({ color: 0xffe4a0, emissive: 0xffb84d, emissiveIntensity: 0.35 });
+  registerHeroGlowMaterial(bulbGlowMat, 0.35, 1.9, 0xffca66);
   for (const sz of [0.48, 2.02]) {
     const sconceBody = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.24, 0.14), darkTrimMat);
     sconceBody.position.set(4.34, 1.98, sz);
@@ -897,6 +1322,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   const chim2638 = makeWorldBox(0.75, 1.85, 0.75, darkTrimMat);
   chim2638.position.set(0.8, 6.65, -4.4);
   g2638.add(main2638, roof2638, trim2638, gables2638, chim2638);
+  registerHeroChimney(scene, g2638, 0.8, 7.65, -4.4);
 
   // South recessed wing + open carport/garage bay + sweeping sloped roof + shed dormer
   const southWall2638 = makeWorldBox(6.73, 2.85, 4.0, blueGreySiding);
@@ -941,8 +1367,15 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
 
   const xmas2638 = new THREE.Group();
   xmas2638.visible = false;
-  addChristmasStringLine(xmas2638, 4.88, 4.95, -5.2, 4.88, 4.95, 1.2, 0.55);
+  addChristmasStringLine(xmas2638, 4.88, 4.95, -5.2, 4.88, 4.95, 1.2, 0.52);
+  addChristmasStringLine(xmas2638, 2.62, 5.42, 1.85, 2.62, 5.95, 3.15, 0.45);
+  addChristmasStringLine(xmas2638, 2.62, 5.95, 3.15, 2.62, 5.42, 4.45, 0.45);
+  addChristmasStringLine(xmas2638, 3.3, 2.55, 1.25, 3.3, 2.55, 5.4, 0.55);
+  addChristmasGarland(xmas2638, 2.34, 2.68, 1.85, 2.34, 2.68, 4.85);
   addChristmasWreath(xmas2638, 2.26, 1.85, 3.35, Math.PI / 2, texLib);
+  addCandyCane(xmas2638, 5.15, 0, 1.75, Math.PI / 2, 0.95);
+  addCandyCane(xmas2638, 5.15, 0, 4.95, Math.PI / 2, 0.95);
+  addGlowingReindeer(xmas2638, 7.8, 0, -2.8, Math.PI * 0.35, 1.0);
   g2638.add(xmas2638);
   heroChristmasGroups.push(xmas2638);
   scene.add(g2638);
@@ -1050,8 +1483,25 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
 
   const xmas2654 = new THREE.Group();
   xmas2654.visible = false;
-  addChristmasStringLine(xmas2654, 5.82, 4.2, -6.4, 5.82, 4.2, 2.8, 0.55);
+  addChristmasStringLine(xmas2654, 5.82, 4.2, -6.4, 5.82, 4.2, 2.8, 0.52);
+  addChristmasStringLine(xmas2654, 4.35, 4.2, 2.9, 4.35, 4.2, 6.5, 0.52);
+  addChristmasGarland(xmas2654, 2.9, 2.85, 3.45, 2.9, 2.85, 5.65);
   addChristmasWreath(xmas2654, 2.86, 1.95, 4.55, Math.PI / 2, texLib);
+  addCandyCane(xmas2654, 4.45, 0, 3.55, Math.PI / 2, 0.95);
+  addCandyCane(xmas2654, 4.45, 0, 5.55, Math.PI / 2, 0.95);
+  addGlowingLawnStar(xmas2654, 7.2, 0, -1.5, Math.PI / 2, 1.05);
+  // Festive spiral lights, golden star & wrapped presents on 2654's towering SE White Spruce
+  const spruceStar = new THREE.Mesh(new THREE.OctahedronGeometry(0.36, 0), getXmasSharedMats().goldGlow);
+  spruceStar.position.set(8.8, 8.95, 3.2);
+  xmas2654.add(spruceStar);
+  for (const [sw, sy] of [[3.9, 1.45], [3.4, 2.75], [2.8, 4.05], [2.2, 5.25], [1.55, 6.35], [0.95, 7.35]]) {
+    const r = sw * 0.52;
+    addChristmasStringLine(xmas2654, 8.8 - r, sy, 3.2 - r, 8.8 + r, sy, 3.2 - r, 0.72);
+    addChristmasStringLine(xmas2654, 8.8 + r, sy, 3.2 - r, 8.8 + r, sy, 3.2 + r, 0.72);
+    addChristmasStringLine(xmas2654, 8.8 + r, sy, 3.2 + r, 8.8 - r, sy, 3.2 + r, 0.72);
+    addChristmasStringLine(xmas2654, 8.8 - r, sy, 3.2 + r, 8.8 - r, sy, 3.2 - r, 0.72);
+  }
+  addPresentBoxes(xmas2654, 8.8, 0, 3.2, 5, 0.4);
   g2654.add(xmas2654);
   heroChristmasGroups.push(xmas2654);
   scene.add(g2654);
@@ -1137,6 +1587,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   const chim2643 = makeWorldBox(0.95, 6.7, 0.75, creamBrickMat, 1.8);
   chim2643.position.set(2.4, 3.35, -5.45);
   chim2643.castShadow = true;
+  registerHeroChimney(scene, g2643, 2.4, 6.78, -5.45);
   const wingRoof2643 = new THREE.Mesh(createPitchedRoofGeometry(9.7, 4.24, 1.85, false, 0.32), darkShingleMat);
   wingRoof2643.position.set(-0.6, 3.85, -3.23);
   wingRoof2643.castShadow = true;
@@ -1172,12 +1623,23 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   sugarMaple.add(smTrunk, smCrown);
   g2643.add(sugarMaple);
 
+  // Porch sconce at 2643 entry
+  const sconce2643 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.12), bulbGlowMat);
+  sconce2643.position.set(4.42, 2.05, 0.92);
+  g2643.add(sconce2643);
+
   const xmas2643 = new THREE.Group();
   xmas2643.visible = false;
-  addChristmasStringLine(xmas2643, 5.65, 5.65, 1.6, 5.65, 5.65, 5.2, 0.55);
-  addChristmasStringLine(xmas2643, 5.65, 5.8, -1.1, 5.65, 7.25, 0.22, 0.5);
-  addChristmasStringLine(xmas2643, 5.65, 7.25, 0.22, 5.65, 5.8, 1.55, 0.5);
+  addChristmasStringLine(xmas2643, 5.65, 5.65, 1.6, 5.65, 5.65, 5.2, 0.52);
+  addChristmasStringLine(xmas2643, 5.65, 5.8, -1.1, 5.65, 7.25, 0.22, 0.48);
+  addChristmasStringLine(xmas2643, 5.65, 7.25, 0.22, 5.65, 5.8, 1.55, 0.48);
+  addChristmasStringLine(xmas2643, 4.48, 3.85, -5.3, 4.48, 3.85, -1.1, 0.52);
+  addChristmasGarland(xmas2643, 5.45, 2.75, -1.0, 5.45, 2.75, 1.45);
   addChristmasWreath(xmas2643, 4.44, 1.65, 0.15, Math.PI / 2, texLib);
+  addVoxelSnowman(xmas2643, 7.2, 0, -2.8, Math.PI / 2, 1.05);
+  addCandyCane(xmas2643, 5.85, 0, -0.75, Math.PI / 2, 0.95);
+  addCandyCane(xmas2643, 5.85, 0, 1.2, Math.PI / 2, 0.95);
+  addGlowingReindeer(xmas2643, 7.4, 0, -5.2, Math.PI * 0.65, 1.0);
   g2643.add(xmas2643);
   heroChristmasGroups.push(xmas2643);
   scene.add(g2643);
@@ -1349,9 +1811,24 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
 
   const xmas387 = new THREE.Group();
   xmas387.visible = false;
-  addChristmasStringLine(xmas387, -7.55, 6.22, 2.6, -7.55, 6.22, 7.4, 0.5);
-  addChristmasStringLine(xmas387, -5.85, 7.82, 7.75, 5.85, 7.82, 7.75, 0.65);
+  // Upper & lower SW stacked balcony string lights + red-bow garlands
+  addChristmasStringLine(xmas387, -7.55, 6.22, 2.6, -7.55, 6.22, 7.4, 0.48);
+  addChristmasStringLine(xmas387, -7.55, 6.22, 7.4, -5.8, 6.22, 7.4, 0.48);
+  addChristmasStringLine(xmas387, -7.55, 3.62, 2.6, -7.55, 3.62, 7.4, 0.48);
+  addChristmasGarland(xmas387, -7.58, 3.6, 2.7, -7.58, 3.6, 7.3);
+  // South & East main eaves + white pediment gable peaks
+  addChristmasStringLine(xmas387, -5.85, 7.82, 7.75, 5.85, 7.82, 7.75, 0.6);
+  addChristmasStringLine(xmas387, 5.88, 7.82, -7.6, 5.88, 7.82, 7.75, 0.6);
+  addChristmasStringLine(xmas387, -2.2, 7.85, 7.95, 0.0, 9.1, 7.95, 0.45);
+  addChristmasStringLine(xmas387, 0.0, 9.1, 7.95, 2.2, 7.85, 7.95, 0.45);
+  addChristmasStringLine(xmas387, 5.95, 7.85, -0.4, 5.95, 9.1, 1.8, 0.45);
+  addChristmasStringLine(xmas387, 5.95, 9.1, 1.8, 5.95, 7.85, 4.0, 0.45);
   addChristmasWreath(xmas387, -5.9, 1.85, 4.8, -Math.PI / 2, texLib);
+  // Snowman, candy canes & glowing star on SE/East green lawn
+  addVoxelSnowman(xmas387, 7.4, 0, 8.2, 0.35, 1.05);
+  addCandyCane(xmas387, 6.3, 0, 7.6, 0, 0.95);
+  addCandyCane(xmas387, 8.4, 0, 7.6, Math.PI, 0.95);
+  addGlowingLawnStar(xmas387, 7.8, 0, 2.2, Math.PI / 2, 1.05);
   g387.add(globeTrunk, globeCrown, crimTrunk, crimCrown, xmas387);
   heroChristmasGroups.push(xmas387);
   scene.add(g387);
@@ -1416,17 +1893,33 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   // Christmas Mode decorations for 2646 Rue des Cormiers (hidden by default)
   const xmas2646 = new THREE.Group();
   xmas2646.visible = false;
-  addChristmasStringLine(xmas2646, 4.45, 5.65, -2.0, 4.45, 5.65, 3.05, 0.55);
-  addChristmasStringLine(xmas2646, 5.25, 5.65, -6.35, 5.25, 5.65, -2.05, 0.55);
-  addChristmasStringLine(xmas2646, 4.25, 2.75, 3.05, 4.25, 2.75, 6.85, 0.55);
+  // Main eave, front bay eave & gable peak, bay window trim, portico gable peak, carport eave & gable peak
+  addChristmasStringLine(xmas2646, 4.45, 5.65, -2.0, 4.45, 5.65, 3.05, 0.52);
+  addChristmasStringLine(xmas2646, 5.25, 5.65, -6.35, 5.25, 5.65, -2.05, 0.52);
+  addChristmasStringLine(xmas2646, 5.25, 5.65, -6.35, 5.25, 7.22, -4.2, 0.46);
+  addChristmasStringLine(xmas2646, 5.25, 7.22, -4.2, 5.25, 5.65, -2.05, 0.46);
+  addChristmasStringLine(xmas2646, 5.56, 2.74, -5.42, 5.56, 2.74, -2.98, 0.44);
+  addChristmasStringLine(xmas2646, 5.74, 2.82, 0.22, 5.74, 3.54, 1.25, 0.4);
+  addChristmasStringLine(xmas2646, 5.74, 3.54, 1.25, 5.74, 2.82, 2.28, 0.4);
+  addChristmasStringLine(xmas2646, 4.25, 2.75, 3.05, 4.25, 2.75, 6.85, 0.52);
+  addChristmasStringLine(xmas2646, 4.25, 2.85, 3.05, 4.25, 4.0, 4.95, 0.48);
+  addChristmasStringLine(xmas2646, 4.25, 4.0, 4.95, 4.25, 2.85, 6.85, 0.48);
+  // Red-bow pine garlands & front door wreath
   addChristmasGarland(xmas2646, 5.65, 2.72, 0.35, 5.65, 2.72, 2.15);
+  addChristmasGarland(xmas2646, 4.22, 2.66, 3.15, 4.22, 2.66, 6.75);
   addChristmasWreath(xmas2646, 4.38, 1.75, 1.25, Math.PI / 2, texLib);
-  addDecoratedChristmasTree(xmas2646, 8.8, 0.0, -1.6, 0.95);
+  // Decorated tree w/ wrapped presents, cute voxel snowman, giant candy canes, glowing reindeer & lawn star
+  addDecoratedChristmasTree(xmas2646, 8.8, 0.0, -1.6, 0.98, true);
+  addVoxelSnowman(xmas2646, 7.6, 0.0, -3.5, Math.PI / 2, 1.05);
+  addCandyCane(xmas2646, 6.35, 0.0, 0.35, Math.PI / 2, 0.95);
+  addCandyCane(xmas2646, 6.35, 0.0, 2.2, Math.PI / 2, 0.95);
+  addGlowingReindeer(xmas2646, 8.4, 0.0, -5.8, Math.PI * 0.42, 1.0);
+  addGlowingLawnStar(xmas2646, 7.2, 0.0, -6.4, Math.PI / 2, 0.95);
   root.add(xmas2646);
   heroChristmasGroups.push(xmas2646);
 
   scene.add(root);
-  return { root, pinGroup, setWinterMode, setChristmasMode };
+  return { root, pinGroup, setWinterMode, setChristmasMode, setNightMode };
 }
 
 function addClassroomWindowBay(group, x0, z0, x1, z1, count, baseY, winH, mats, options = {}) {
@@ -2036,6 +2529,12 @@ function addDropOffLoopAndParkingDetails(group, texLib, elevData, mats) {
   addSignPost(292.0, 206.5, oneWayTex, 1.15, 0.36, -0.3);
 
   // Tall slender metal light standards around NW drop-off loop & NE parking lot
+  const schoolLampLensMat = new THREE.MeshStandardMaterial({
+    color: 0xfff3d1,
+    emissive: 0xffe4a0,
+    emissiveIntensity: 0.25,
+  });
+  registerHeroGlowMaterial(schoolLampLensMat, 0.25, 1.9, 0xffe49e);
   for (const [lx, lz, rot] of [
     [219.0, 206.5, 0.1],
     [238.5, 208.5, 0.1],
@@ -2055,10 +2554,7 @@ function addDropOffLoopAndParkingDetails(group, texLib, elevData, mats) {
     arm.position.set(0, 6.35, 0.5);
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.1, 0.58), mats.parapetMat);
     head.position.set(0, 6.35, 1.05);
-    const lens = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, 0.04, 0.45),
-      new THREE.MeshStandardMaterial({ color: 0xfff3d1, emissive: 0xffe4a0, emissiveIntensity: 0.45 })
-    );
+    const lens = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.04, 0.45), schoolLampLensMat);
     lens.position.set(0, 6.29, 1.05);
     light.add(pole, arm, head, lens);
     group.add(light);
@@ -2101,10 +2597,12 @@ export function buildEcoleDeLaSamare(scene, texLib, schoolBuilding, pitches, pla
     roughness: 0.18,
     metalness: 0.5,
   });
+  registerHeroWindowMaterial(schoolGlassMat, texLib, 0.68, 0xffb84d);
   const whiteFrameMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f7, roughness: 0.42 });
   const infillMat = new THREE.MeshStandardMaterial({ color: 0x343a40, roughness: 0.68 });
   const hvacMat = new THREE.MeshStandardMaterial({ color: 0xb6bec6, metalness: 0.45, roughness: 0.42 });
   const skylightMat = new THREE.MeshStandardMaterial({ color: 0x9ac6e2, roughness: 0.2, metalness: 0.2 });
+  registerHeroWindowMaterial(skylightMat, texLib, 0.48, 0xffc66d);
   const concreteMat = new THREE.MeshStandardMaterial({ map: texLib.concreteTex, color: 0xd8dce0, roughness: 0.88 });
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x9e6a3b, roughness: 0.78 });
   const steelMat = new THREE.MeshStandardMaterial({ color: 0xc2c8ce, metalness: 0.65, roughness: 0.35 });
@@ -2229,9 +2727,11 @@ export function buildEcoleDeLaSamare(scene, texLib, schoolBuilding, pitches, pla
   canopy.position.set(271.5, schoolElev + 3.65, 213.8);
   canopy.rotation.y = -0.1;
   canopy.castShadow = true;
+  const schoolSignMat = new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.45 });
+  registerHeroSignMaterial(schoolSignMat, signTex, 0.72, 0xfff0d0);
   const schoolSign = new THREE.Mesh(
     new THREE.BoxGeometry(5.6, 0.72, 0.14),
-    new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.45 })
+    schoolSignMat
   );
   schoolSign.position.set(271.5, schoolElev + 3.9, 212.45);
   schoolSign.rotation.y = -0.1;
@@ -2384,12 +2884,19 @@ export function buildEcoleDeLaSamare(scene, texLib, schoolBuilding, pitches, pla
   const xmasSchool = new THREE.Group();
   xmasSchool.visible = false;
   addChristmasGarland(xmasSchool, 268.0, schoolElev + 3.52, 212.2, 275.0, schoolElev + 3.52, 212.9);
+  addChristmasGarland(xmasSchool, 276.0, schoolElev + 5.15, 219.1, 286.2, schoolElev + 5.15, 220.1);
   addChristmasWreath(xmasSchool, 271.5, schoolElev + 2.05, 214.25, -0.1, texLib);
-  addChristmasStringLine(xmasSchool, 267.5, schoolElev + 5.2, 214.0, 276.2, schoolElev + 5.2, 214.9, 0.75);
-  addChristmasStringLine(xmasSchool, 284.7, schoolElev + 5.2, 237.3, 314.1, schoolElev + 5.2, 240.2, 0.85);
-  addChristmasStringLine(xmasSchool, 231.9, schoolElev + 8.25, 258.4, 257.4, schoolElev + 8.25, 260.9, 0.85);
+  addChristmasStringLine(xmasSchool, 267.5, schoolElev + 5.2, 214.0, 276.2, schoolElev + 5.2, 214.9, 0.7);
+  addChristmasStringLine(xmasSchool, 284.7, schoolElev + 5.2, 237.3, 314.1, schoolElev + 5.2, 240.2, 0.8);
+  addChristmasStringLine(xmasSchool, 231.9, schoolElev + 8.25, 258.4, 257.4, schoolElev + 8.25, 260.9, 0.8);
+  addChristmasStringLine(xmasSchool, 265.2, schoolElev + 5.2, 238.1, 267.6, schoolElev + 5.2, 214.1, 0.85);
   const schoolTreeElev = sampleElevation(266.0, 221.5, elevData);
-  addDecoratedChristmasTree(xmasSchool, 266.0, schoolTreeElev, 221.5, 1.15);
+  addDecoratedChristmasTree(xmasSchool, 266.0, schoolTreeElev, 221.5, 1.2, true);
+  // Giant candy canes flanking main entrance + glowing stars & reindeer on front plaza
+  addCandyCane(xmasSchool, 268.2, sampleElevation(268.2, 211.0, elevData), 211.0, 0.1, 1.15);
+  addCandyCane(xmasSchool, 274.8, sampleElevation(274.8, 211.7, elevData), 211.7, Math.PI + 0.1, 1.15);
+  addGlowingReindeer(xmasSchool, 263.0, sampleElevation(263.0, 220.5, elevData), 220.5, -0.4, 1.1);
+  addGlowingLawnStar(xmasSchool, 278.5, sampleElevation(278.5, 215.5, elevData), 215.5, -0.1, 1.15);
   group.add(xmasSchool);
   heroChristmasGroups.push(xmasSchool);
 
@@ -2452,15 +2959,24 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     { map: texLib.winterIceTex, color: 0xeaf6ff, roughness: 0.14, metalness: 0.15 }
   );
   const parkMats = { steelMat, chainLinkMat };
+  const parkLampMat = new THREE.MeshStandardMaterial({
+    color: 0xfff2cc,
+    emissive: 0xffdf91,
+    emissiveIntensity: 0.25,
+  });
+  registerHeroGlowMaterial(parkLampMat, 0.25, 1.9, 0xffe49e);
+  const floodLampMat = new THREE.MeshStandardMaterial({
+    color: 0xfff5d6,
+    emissive: 0xffe49e,
+    emissiveIntensity: 0.3,
+  });
+  registerHeroGlowMaterial(floodLampMat, 0.3, 2.1, 0xfff0b8);
 
   const addParkLamp = (x, z) => {
     const e = sampleElevation(x, z, elevData);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 4.2, 6), postMat);
     pole.position.set(x, e + 2.1, z);
-    const globe = new THREE.Mesh(
-      new THREE.BoxGeometry(0.32, 0.34, 0.32),
-      new THREE.MeshStandardMaterial({ color: 0xfff2cc, emissive: 0xffdf91, emissiveIntensity: 0.5 })
-    );
+    const globe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.34, 0.32), parkLampMat);
     globe.position.set(x, e + 4.3, z);
     group.add(pole, globe);
   };
@@ -2654,10 +3170,7 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
       const fe = sampleElevation(fx, fz, elevData);
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 7.2, 6), postMat);
       pole.position.set(fx, fe + 3.6, fz);
-      const lamp = new THREE.Mesh(
-        new THREE.BoxGeometry(0.75, 0.28, 0.36),
-        new THREE.MeshStandardMaterial({ color: 0xfff5d6, emissive: 0xffe49e, emissiveIntensity: 0.55 })
-      );
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.28, 0.36), floodLampMat);
       lamp.position.set(fx, fe + 7.2, fz);
       group.add(pole, lamp);
     }
@@ -2757,10 +3270,7 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
       const pElev = sampleElevation(pt[0], pt[1], elevData);
       const pole = new THREE.Mesh(new THREE.BoxGeometry(0.14, 6.2, 0.14), postMat);
       pole.position.set(pt[0], pElev + 3.1, pt[1]);
-      const flood = new THREE.Mesh(
-        new THREE.BoxGeometry(0.65, 0.25, 0.35),
-        new THREE.MeshStandardMaterial({ color: 0xfff5d6, emissive: 0xffe49e, emissiveIntensity: 0.55 })
-      );
+      const flood = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.25, 0.35), floodLampMat);
       flood.position.set(pt[0], pElev + 6.2, pt[1]);
       group.add(pole, flood);
     }
@@ -2785,6 +3295,12 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
   const chTrimMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.52 });
   const chGreenMat = new THREE.MeshStandardMaterial({ color: 0x1e4d2b, roughness: 0.58 });
   const chWinMat = new THREE.MeshStandardMaterial({ map: texLib.windowTex, color: 0xffffff, roughness: 0.25, metalness: 0.22 });
+  registerHeroWindowMaterial(chWinMat, texLib, 0.72, 0xffb84d);
+  const chBrickChimMat = new THREE.MeshStandardMaterial({
+    map: texLib.brickTextures[3] || texLib.brickTextures[0],
+    color: 0x9c4e3b,
+    roughness: 0.86,
+  });
 
   const chFound = makeWorldBox(9.8, 1.8, 15.0, new THREE.MeshStandardMaterial({ map: texLib.foundationTex || texLib.concreteTex, color: 0xb6bbb6, roughness: 0.92 }));
   chFound.position.set(0, -0.55, 0);
@@ -2800,7 +3316,16 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
   chRoof.castShadow = true;
   const chRoofTrim = new THREE.Mesh(createRoofTrimGeometry(9.7, 14.9, 2.15, true, 0.65), chTrimMat);
   chRoofTrim.position.copy(chRoof.position);
-  chaletGrp.add(chFound, chLower, chUpper, chRoof, chRoofTrim);
+  // Brick chimney on Chalet du Parc Gilles-Charland
+  const chChim = makeWorldBox(0.88, 2.4, 0.88, chBrickChimMat, 1.8);
+  chChim.position.set(-1.4, 5.55, -2.6);
+  chChim.castShadow = true;
+  const chChimCap = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.14, 1.02), chTrimMat);
+  chChimCap.position.set(-1.4, 6.82, -2.6);
+  const chChimFlue = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.22, 0.44), postMat);
+  chChimFlue.position.set(-1.4, 6.96, -2.6);
+  chaletGrp.add(chFound, chLower, chUpper, chRoof, chRoofTrim, chChim, chChimCap, chChimFlue);
+  registerHeroChimney(scene, chaletGrp, -1.4, 7.08, -2.6);
 
   // Covered front veranda facing rink/parking (+X side) with timber columns, skate benches & chalet banner
   const verandaDeck = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.36, 13.8), new THREE.MeshStandardMaterial({ map: texLib.concreteTex, color: 0xc2c6c2, roughness: 0.9 }));
@@ -2823,9 +3348,17 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
   const chDoorPane = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.55, 1.45), chWinMat);
   chDoorPane.position.set(4.9, 1.65, 0);
   const chSignTex = texLib.makeBannerTexture('CHALET • PARC GILLES-CHARLAND', '#1e4d2b', '#f5f6f0', 440, 68);
-  const chSign = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.62, 5.4), new THREE.MeshStandardMaterial({ map: chSignTex, roughness: 0.45 }));
+  const chSignMat = new THREE.MeshStandardMaterial({ map: chSignTex, roughness: 0.45 });
+  registerHeroSignMaterial(chSignMat, chSignTex, 0.72, 0xfff0d0);
+  const chSign = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.62, 5.4), chSignMat);
   chSign.position.set(7.1, 3.05, 0);
   chaletGrp.add(chDoor, chDoorPane, chSign);
+  // Warm veranda sconces flanking chalet double doors
+  for (const sz of [-1.45, 1.45]) {
+    const chSconce = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 0.14), parkLampMat);
+    chSconce.position.set(4.96, 2.35, sz);
+    chaletGrp.add(chSconce);
+  }
   for (const wz of [-4.6, 4.6]) {
     const winF = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.25, 1.75), chGreenMat);
     winF.position.set(4.88, 2.2, wz);
@@ -2846,6 +3379,27 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     hoop.position.set(7.8, 0.08, 3.2 + bi * 0.52);
     chaletGrp.add(hoop);
   }
+  // Christmas Mode decorations for Chalet du Parc Gilles-Charland (hidden by default)
+  const xmasChalet = new THREE.Group();
+  xmasChalet.visible = false;
+  // Multicolor string lights around chalet eaves & front veranda roof
+  addChristmasStringLine(xmasChalet, 5.45, 3.96, -7.8, 5.45, 3.96, 7.8, 0.6);
+  addChristmasStringLine(xmasChalet, -5.45, 3.96, -7.8, -5.45, 3.96, 7.8, 0.65);
+  addChristmasStringLine(xmasChalet, -5.45, 3.96, -7.8, 5.45, 3.96, -7.8, 0.65);
+  addChristmasStringLine(xmasChalet, -5.45, 3.96, 7.8, 5.45, 3.96, 7.8, 0.65);
+  addChristmasStringLine(xmasChalet, 7.26, 3.02, -7.1, 7.26, 3.02, 7.1, 0.55);
+  // Red-bow pine garlands & festive "JOYEUX NOËL" banner on veranda + door wreath
+  addChristmasGarland(xmasChalet, 7.12, 2.74, -6.4, 7.12, 2.74, -2.2);
+  addChristmasGarland(xmasChalet, 7.12, 2.74, 2.2, 7.12, 2.74, 6.4);
+  addChristmasBanner(xmasChalet, 7.22, 3.68, 0, 3.8, 0.62, Math.PI / 2, '★ JOYEUX NOËL ★', texLib);
+  addChristmasWreath(xmasChalet, 5.02, 1.85, 0, Math.PI / 2, texLib);
+  // Cute voxel snowman beside the chalet + giant candy canes + glowing lawn star
+  addVoxelSnowman(xmasChalet, 8.6, 0, -4.6, Math.PI / 2, 1.15);
+  addCandyCane(xmasChalet, 7.5, 0, -1.6, Math.PI / 2, 1.05);
+  addCandyCane(xmasChalet, 7.5, 0, 1.6, Math.PI / 2, 1.05);
+  addGlowingLawnStar(xmasChalet, 8.8, 0, -7.2, Math.PI / 2, 1.1);
+  chaletGrp.add(xmasChalet);
+  heroChristmasGroups.push(xmasChalet);
   group.add(chaletGrp);
 
   // Parc Gilles-Charland: Cohesive Terrain-Hugging Walkways + Lit Sentier Glacé Wooded Trail + Signage
@@ -3057,10 +3611,15 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
   const xmasPark = new THREE.Group();
   xmasPark.visible = false;
   const parkTreeElev = sampleElevation(-191.5, -245.5, elevData);
-  addDecoratedChristmasTree(xmasPark, -191.5, parkTreeElev, -245.5, 1.35);
+  addDecoratedChristmasTree(xmasPark, -191.5, parkTreeElev, -245.5, 1.4, true);
+  // Glowing reindeer & lawn star beside the Parc Gilles-Charland Christmas tree + candy canes by park sign
+  addGlowingReindeer(xmasPark, -188.6, sampleElevation(-188.6, -247.0, elevData), -247.0, 0.65, 1.15);
+  addGlowingLawnStar(xmasPark, -194.2, sampleElevation(-194.2, -247.5, elevData), -247.5, -0.35, 1.15);
+  addCandyCane(xmasPark, -197.2, sampleElevation(-197.2, -243.2, elevData), -243.2, -0.45, 1.05);
+  addCandyCane(xmasPark, -193.8, sampleElevation(-193.8, -241.8, elevData), -241.8, Math.PI - 0.45, 1.05);
   const rinkY = (rink ? sampleElevation(rink.cx, rink.cz, elevData) : parkTreeElev) + 1.28;
   addChristmasGarland(xmasPark, -172.5, rinkY, -205.5, -130.5, rinkY, -202.0);
-  addChristmasStringLine(xmasPark, -172.5, rinkY, -226.0, -130.5, rinkY, -222.5, 0.9);
+  addChristmasStringLine(xmasPark, -172.5, rinkY, -226.0, -130.5, rinkY, -222.5, 0.85);
   const signElev = sampleElevation(-194, -240, elevData);
   addChristmasGarland(xmasPark, -195.4, signElev + 2.15, -240.6, -192.6, signElev + 2.15, -239.4);
   group.add(xmasPark);
@@ -3077,6 +3636,7 @@ export function buildCommercialSigns(scene, texLib, buildings, elevDataArg = nul
   const group = new THREE.Group();
 
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x223648, roughness: 0.16, metalness: 0.48 });
+  registerHeroWindowMaterial(glassMat, texLib, 0.68, 0xffc05c);
   const frameMat = new THREE.MeshStandardMaterial({ color: 0xe9edf2, roughness: 0.45 });
   const steelMat = new THREE.MeshStandardMaterial({ color: 0xbcc3ca, metalness: 0.65, roughness: 0.35 });
   const concreteMat = new THREE.MeshStandardMaterial({ map: texLib.concreteTex, color: 0xc2c6ca, roughness: 0.88 });
@@ -3143,10 +3703,9 @@ export function buildCommercialSigns(scene, texLib, buildings, elevDataArg = nul
 
   const addFascia = (sg, x, y, w, h, text, bg, fg, awningColor = null) => {
     const tex = texLib.makeBannerTexture(text, bg, fg, 384, 72);
-    const sign = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, 0.24),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.42 })
-    );
+    const signMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.42 });
+    registerHeroSignMaterial(signMat, tex, 0.8, 0xffffff);
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.24), signMat);
     sign.position.set(x, y, 0.14);
     sg.add(sign);
     if (awningColor !== null) {
@@ -3197,9 +3756,11 @@ export function buildCommercialSigns(scene, texLib, buildings, elevDataArg = nul
     const pole = new THREE.Mesh(new THREE.BoxGeometry(0.42, 5.2, 0.42), darkMat);
     pole.position.set(x, pElev + 2.6, z);
     const tex = texLib.makeBannerTexture(title, bg, fg, 256, 96);
+    const pylonMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4 });
+    registerHeroSignMaterial(pylonMat, tex, 0.85, 0xffffff);
     const box = new THREE.Mesh(
       new THREE.BoxGeometry(3.2, 1.45, 0.35),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4 })
+      pylonMat
     );
     box.position.set(x, pElev + 4.8, z);
     box.rotation.y = 0.32;
@@ -3355,10 +3916,9 @@ export function buildCommercialSigns(scene, texLib, buildings, elevDataArg = nul
       );
       menuBoard.position.set(-3.2, 1.9, 0.22);
       const ouvertTex = texLib.makeBannerTexture('OUVERT', '#181a1d', '#ff2d46', 128, 48);
-      const ouvertSign = new THREE.Mesh(
-        new THREE.BoxGeometry(1.15, 0.45, 0.12),
-        new THREE.MeshStandardMaterial({ map: ouvertTex, emissive: 0xaa1122, emissiveIntensity: 0.55 })
-      );
+      const ouvertMat = new THREE.MeshStandardMaterial({ map: ouvertTex, emissive: 0xaa1122, emissiveIntensity: 0.55 });
+      registerHeroGlowMaterial(ouvertMat, 0.55, 1.85, 0xff2b3d);
+      const ouvertSign = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.45, 0.12), ouvertMat);
       ouvertSign.position.set(2.8, 2.2, 0.22);
       sg.add(menuBoard, ouvertSign);
       addPromoBoardAndPosters(sg, 3.8, 2.0, '2/$8.99', '#ffdd33', '#c82026');
@@ -3407,6 +3967,7 @@ export function buildCommercialSigns(scene, texLib, buildings, elevDataArg = nul
     if (bid === 825258956) {
       // Glowing pharmacy cross on Jean Coutu
       const crossMat = new THREE.MeshStandardMaterial({ color: 0x1ea84a, emissive: 0x1ea84a, emissiveIntensity: 0.75 });
+      registerHeroGlowMaterial(crossMat, 0.75, 1.85, 0x24d65c);
       const cV = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.35, 0.18), crossMat);
       const cH = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.45, 0.18), crossMat);
       cV.position.set(signW * 0.56, sy, 0.18);
@@ -3484,6 +4045,7 @@ export function buildDepanneurGalvin(scene, texLib, bGalvin, elevDataArg = null)
     { map: texLib.snowTex, color: 0xeef5fc, roughness: 0.85 }
   );
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x1d2b36, roughness: 0.16, metalness: 0.45 });
+  registerHeroWindowMaterial(glassMat, texLib, 0.72, 0xffbe55);
   const whiteTrimMat = new THREE.MeshStandardMaterial({ color: 0xf4f5f6, roughness: 0.55 });
   const woodDeckMat = new THREE.MeshStandardMaterial({ color: 0x9b6b43, roughness: 0.82 });
 
@@ -3554,10 +4116,9 @@ export function buildDepanneurGalvin(scene, texLib, bGalvin, elevDataArg = null)
 
   // Illuminated "Dépanneur GALVIN" Sign + Green/Orange Shield Emblem + Light-Silver Eyebrow Canopy
   const signTex = texLib.makeBannerTexture('Dépanneur GALVIN', '#9e6b3f', '#ffffff', 512, 96);
-  const signBoard = new THREE.Mesh(
-    new THREE.BoxGeometry(6.8, 1.05, 0.16),
-    new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.35 })
-  );
+  const galvinSignMat = new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.35 });
+  registerHeroSignMaterial(galvinSignMat, signTex, 0.9, 0xffe4a8);
+  const signBoard = new THREE.Mesh(new THREE.BoxGeometry(6.8, 1.05, 0.16), galvinSignMat);
   signBoard.position.set(3.2, 5.15, 6.02);
   const emblem = new THREE.Mesh(
     new THREE.CylinderGeometry(0.42, 0.18, 0.14, 5),
@@ -3577,19 +4138,17 @@ export function buildDepanneurGalvin(scene, texLib, bGalvin, elevDataArg = null)
   const winFrame = new THREE.Mesh(new THREE.BoxGeometry(2.65, 2.35, 0.14), darkCharcoalMat);
   winFrame.position.set(-0.1, 1.72, 5.96);
   const posterTex = texLib.makeBannerTexture('SLUSH • SNACKS', '#e88224', '#1d2b36', 256, 128);
-  const winPane = new THREE.Mesh(
-    new THREE.BoxGeometry(2.42, 2.12, 0.16),
-    new THREE.MeshStandardMaterial({ map: posterTex, roughness: 0.25 })
-  );
+  const winPaneMat = new THREE.MeshStandardMaterial({ map: posterTex, roughness: 0.25 });
+  registerHeroSignMaterial(winPaneMat, posterTex, 0.72, 0xffe4a8);
+  const winPane = new THREE.Mesh(new THREE.BoxGeometry(2.42, 2.12, 0.16), winPaneMat);
   winPane.position.set(-0.1, 1.72, 5.98);
   const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(2.15, 2.48, 0.14), darkCharcoalMat);
   doorFrame.position.set(2.55, 1.48, 5.96);
   const doorGlass = new THREE.Mesh(new THREE.BoxGeometry(1.92, 2.28, 0.16), glassMat);
   doorGlass.position.set(2.55, 1.48, 5.98);
-  const ouvertSign = new THREE.Mesh(
-    new THREE.BoxGeometry(0.65, 0.26, 0.18),
-    new THREE.MeshStandardMaterial({ color: 0xff2b2b, emissive: 0xff1a1a, emissiveIntensity: 0.9 })
-  );
+  const ouvertMat = new THREE.MeshStandardMaterial({ color: 0xff2b2b, emissive: 0xff1a1a, emissiveIntensity: 0.75 });
+  registerHeroGlowMaterial(ouvertMat, 0.75, 2.1, 0xff2424);
+  const ouvertSign = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.26, 0.18), ouvertMat);
   ouvertSign.position.set(0.55, 2.05, 6.02);
   frontGroup.add(apron, winFrame, winPane, doorFrame, doorGlass, ouvertSign);
 
@@ -3673,13 +4232,21 @@ export function buildDepanneurGalvin(scene, texLib, bGalvin, elevDataArg = null)
   // Christmas Mode decorations for Dépanneur Galvin (hidden by default)
   const xmasGalvin = new THREE.Group();
   xmasGalvin.visible = false;
-  addChristmasStringLine(xmasGalvin, -1.8, 6.2, 6.18, 11.2, 6.2, 6.18, 0.6);
-  addChristmasStringLine(xmasGalvin, 11.4, 6.2, -10.1, 11.4, 6.2, 6.1, 0.65);
-  addChristmasStringLine(xmasGalvin, -1.8, 3.45, 6.86, 3.8, 3.45, 6.86, 0.5);
-  addChristmasStringLine(xmasGalvin, 3.65, 3.3, 10.35, 10.55, 3.3, 10.35, 0.55);
-  addChristmasStringLine(xmasGalvin, -10.75, 4.88, 5.25, -2.2, 4.88, 5.25, 0.65);
+  addChristmasStringLine(xmasGalvin, -1.8, 6.2, 6.18, 11.2, 6.2, 6.18, 0.55);
+  addChristmasStringLine(xmasGalvin, 11.4, 6.2, -10.1, 11.4, 6.2, 6.1, 0.62);
+  addChristmasStringLine(xmasGalvin, -1.8, 3.45, 6.86, 3.8, 3.45, 6.86, 0.48);
+  addChristmasStringLine(xmasGalvin, 3.65, 3.3, 10.35, 10.55, 3.3, 10.35, 0.5);
+  addChristmasStringLine(xmasGalvin, -10.75, 4.88, 5.25, -2.2, 4.88, 5.25, 0.58);
+  // Red-bow pine garlands along eyebrow canopy & covered patio + festive "JOYEUX NOËL" banner
+  addChristmasGarland(xmasGalvin, -1.75, 3.55, 6.9, 3.75, 3.55, 6.9);
+  addChristmasGarland(xmasGalvin, 3.9, 3.28, 10.38, 10.4, 3.28, 10.38);
+  addChristmasBanner(xmasGalvin, 7.1, 3.88, 10.42, 4.4, 0.72, 0, '★ JOYEUX NOËL ★', texLib);
   addChristmasWreath(xmasGalvin, 2.55, 1.85, 6.1, 0, texLib);
-  addDecoratedChristmasTree(xmasGalvin, 11.6, 0.05, 8.6, 0.9);
+  // Decorated tree w/ wrapped presents + giant candy canes flanking entrance + glowing terrace star
+  addDecoratedChristmasTree(xmasGalvin, 11.6, 0.05, 8.6, 0.98, true);
+  addCandyCane(xmasGalvin, 1.25, 0.16, 6.45, 0, 0.95);
+  addCandyCane(xmasGalvin, 3.8, 0.16, 6.45, Math.PI, 0.95);
+  addGlowingLawnStar(xmasGalvin, -6.5, 4.0, 4.5, 0, 1.05);
   frontGroup.add(xmasGalvin);
   heroChristmasGroups.push(xmasGalvin);
 
@@ -3713,9 +4280,12 @@ export function buildDepanneurGalvin(scene, texLib, bGalvin, elevDataArg = null)
   const pylonElev = sampleElevation(pylonX, pylonZ, elevData);
   const pylonPole = new THREE.Mesh(new THREE.BoxGeometry(0.26, 4.6, 0.26), darkCharcoalMat);
   pylonPole.position.set(pylonX, pylonElev + 2.3, pylonZ);
+  const pylonTex = texLib.makeBannerTexture('DÉP. GALVIN • VOISIN', '#359648', '#ffffff', 256, 64);
+  const pylonMat = new THREE.MeshStandardMaterial({ map: pylonTex, roughness: 0.4 });
+  registerHeroSignMaterial(pylonMat, pylonTex, 0.85, 0xffffff);
   const pylonBox = new THREE.Mesh(
     new THREE.BoxGeometry(2.8, 1.4, 0.35),
-    new THREE.MeshStandardMaterial({ map: texLib.makeBannerTexture('DÉP. GALVIN • VOISIN', '#359648', '#ffffff', 256, 64), roughness: 0.4 })
+    pylonMat
   );
   pylonBox.position.set(pylonX, pylonElev + 4.9, pylonZ);
   pylonBox.rotation.y = 0.42;

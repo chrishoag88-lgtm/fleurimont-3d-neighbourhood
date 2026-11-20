@@ -755,6 +755,50 @@ export function createTextureLibrary() {
   windowTex.wrapS = THREE.ClampToEdgeWrapping;
   windowTex.wrapT = THREE.ClampToEdgeWrapping;
 
+  // 23b. Warm Glowing Lit Residential Window at Night (64x64, ClampToEdgeWrapping)
+  const [wlc, wlctx] = makeCanvas(64, 64);
+  // Dark window frame at night
+  wlctx.fillStyle = '#36302a';
+  wlctx.fillRect(0, 0, 64, 64);
+  wlctx.fillStyle = '#26211d';
+  wlctx.fillRect(2, 2, 60, 60);
+  // Warm golden-amber lit interior panes with subtle lamp glow gradient & shaded top-left pane for realism
+  for (let y = 4; y < 60; y++) {
+    for (let x = 4; x < 60; x++) {
+      const isTopLeft = x < 31 && y < 23;
+      const isCurtainEdge = (x >= 4 && x <= 10) || (x >= 53 && x <= 59);
+      let col;
+      if (isTopLeft) {
+        // Partially shaded/dimmed upper-left pane for lived-in night realism
+        col = y > 16 ? '#8c6533' : (y % 4 === 0 ? '#3f3428' : '#4e3f2d');
+      } else {
+        // Warm glowing interior lamp pool (#ffd47a / #ffe7a8)
+        const distCenter = Math.hypot(x - 36, y - 40);
+        if (distCenter < 14) col = '#fff0bd';
+        else if (distCenter < 24) col = '#ffe7a8';
+        else if (distCenter < 35) col = '#ffd47a';
+        else col = '#ebb457';
+        if (isCurtainEdge && (x + y) % 2 === 0) col = '#c98f3e';
+      }
+      wlctx.fillStyle = col;
+      wlctx.fillRect(x, y, 1, 1);
+    }
+  }
+  // Crisp dark outer frame + central vertical mullion + horizontal transom bar (muntins)
+  wlctx.fillStyle = '#322c26';
+  wlctx.fillRect(0, 0, 64, 4);
+  wlctx.fillRect(0, 60, 64, 4);
+  wlctx.fillRect(0, 0, 4, 64);
+  wlctx.fillRect(60, 0, 4, 64);
+  wlctx.fillRect(30, 4, 4, 56);
+  wlctx.fillRect(4, 22, 56, 3);
+  // Inner subtle highlight on sill
+  wlctx.fillStyle = '#5a4d3f';
+  wlctx.fillRect(3, 59, 58, 1);
+  const windowLitTex = toTex(wlc, 1, 1);
+  windowLitTex.wrapS = THREE.ClampToEdgeWrapping;
+  windowLitTex.wrapT = THREE.ClampToEdgeWrapping;
+
   // 24. Insulated White Quebec Sectional Garage Door (64x64, ClampToEdgeWrapping)
   const [gdc, gdctx] = makeCanvas(64, 64);
   gdctx.fillStyle = '#eff1ee';
@@ -976,6 +1020,7 @@ export function createTextureLibrary() {
     christmasSignTex,
     wreathTex,
     windowTex,
+    windowLitTex,
     garageDoorTex,
     gravelTex,
     cedarPlankTex,

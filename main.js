@@ -10,6 +10,8 @@ import {
   buildDepanneurGalvin,
   setWinterMode as heroSetWinterMode,
   setChristmasMode as heroSetChristmasMode,
+  setNightMode as heroSetNightMode,
+  updateHeroSmoke,
 } from './heroLandmarks.js';
 import {
   buildGroundAndLanduse,
@@ -18,6 +20,8 @@ import {
   buildSuburbanDetailsAndTrees,
   setWinterMode as worldSetWinterMode,
   setChristmasMode as worldSetChristmasMode,
+  setNightMode as worldSetNightMode,
+  updateChimneySmoke,
 } from './worldBuilders.js';
 import { createSimulation, makePedestrianMesh } from './simulation.js';
 
@@ -101,6 +105,46 @@ for (let i = 0; i < CLOUD_COUNT; i++) {
 }
 scene.add(cloudMesh);
 
+// Crisp starry night sky starfield (~450 stars across upper sky dome)
+const STAR_COUNT = 450;
+const starPositions = new Float32Array(STAR_COUNT * 3);
+const starColors = new Float32Array(STAR_COUNT * 3);
+const starPalette = [
+  new THREE.Color(0xffffff),
+  new THREE.Color(0xdbe8ff),
+  new THREE.Color(0xfff1d6),
+  new THREE.Color(0xc4dbff),
+];
+for (let i = 0; i < STAR_COUNT; i++) {
+  const az = Math.random() * Math.PI * 2;
+  const el = 0.08 + Math.pow(Math.random(), 0.72) * (Math.PI * 0.41);
+  const r = 1880 + Math.random() * 140;
+  starPositions[i * 3] = Math.cos(el) * Math.cos(az) * r;
+  starPositions[i * 3 + 1] = Math.sin(el) * r;
+  starPositions[i * 3 + 2] = Math.cos(el) * Math.sin(az) * r;
+  const c = starPalette[i % starPalette.length];
+  const bright = 0.72 + Math.random() * 0.28;
+  starColors[i * 3] = c.r * bright;
+  starColors[i * 3 + 1] = c.g * bright;
+  starColors[i * 3 + 2] = c.b * bright;
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+const starMat = new THREE.PointsMaterial({
+  size: 9.5,
+  sizeAttenuation: true,
+  vertexColors: true,
+  transparent: true,
+  opacity: 0.94,
+  depthWrite: false,
+  fog: false,
+});
+const stars = new THREE.Points(starGeo, starMat);
+stars.frustumCulled = false;
+stars.visible = false;
+scene.add(stars);
+
 const camera = new THREE.PerspectiveCamera(54, window.innerWidth / window.innerHeight, 0.4, 3400);
 // Initial view: Street-side oblique angle framing 2646 Rue des Cormiers from Rue des Cormiers
 camera.position.set(27, 11.5, 16);
@@ -114,7 +158,10 @@ orbit.maxDistance = 1650;
 orbit.target.set(0, 2.5, 0);
 orbit.update();
 
-// --- 2. Lighting (Sun + Sky Hemisphere + Shadow Frustum) ---
+// --- 2. Lighting (Sun/Moon + Sky Hemisphere + Ambient + Shadow Frustum) ---
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.08);
+scene.add(ambientLight);
+
 const hemiLight = new THREE.HemisphereLight(0xdff0ff, 0x677a54, 0.92);
 scene.add(hemiLight);
 
@@ -393,9 +440,11 @@ window.addEventListener('pointermove', (e) => {
   }
 });
 
-// --- 5. Time-of-Day Daylight, Winter Mode & Layer Controls ---
+// --- 5. Time-of-Day Daylight, Day/Night Mode, Winter Mode & Layer Controls ---
 const timeSlider = document.getElementById('time-slider');
 const timeDisplay = document.getElementById('time-display');
+const modeDayBtn = document.getElementById('mode-day');
+const modeNightBtn = document.getElementById('mode-night');
 const chkWinter = document.getElementById('chk-winter');
 const winterToggleLabel = document.querySelector('.winter-toggle');
 const winterPill = document.querySelector('.winter-pill');
@@ -403,6 +452,7 @@ const chkChristmas = document.getElementById('chk-christmas');
 const christmasToggleLabel = document.querySelector('.christmas-toggle');
 const christmasPill = document.querySelector('.christmas-pill');
 let nightFactor = 0;
+let isNightMode = false;
 let isWinter = false;
 let isChristmas = false;
 
@@ -411,30 +461,47 @@ function updateDaylight(hour) {
   const mm = Math.round((hour - hh) * 60);
   timeDisplay.textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 
-  // Sun elevation arc (06:00 sunrise -> 12:30 noon -> 19:30 sunset)
+  const isNight = hour >= 19.5 || hour < 6.2;
+  isNightMode = isNight;
+  if (modeDayBtn) modeDayBtn.classList.toggle('active', !isNight);
+  if (modeNightBtn) modeNightBtn.classList.toggle('active', isNight);
+
+  // Sun elevation arc (06:00 sunrise -> 12:30 noon -> 19:30 sunset) or high moonlight rim at night
   const dayProgress = (hour - 6.0) / 13.5; // 0..1
   const elev = Math.sin(Math.max(0.02, Math.min(0.98, dayProgress)) * Math.PI) * 1.15;
   const azim = (dayProgress - 0.5) * 2.4 + 0.35;
   const dist = 260;
-  sunLight.userData.offset = new THREE.Vector3(
-    Math.sin(azim) * Math.cos(elev) * dist,
-    Math.max(12, Math.sin(elev) * dist),
-    Math.cos(azim) * Math.cos(elev) * dist
-  );
+  if (isNight) {
+    sunLight.userData.offset = new THREE.Vector3(-140, 185, -125);
+  } else {
+    sunLight.userData.offset = new THREE.Vector3(
+      Math.sin(azim) * Math.cos(elev) * dist,
+      Math.max(12, Math.sin(elev) * dist),
+      Math.cos(azim) * Math.cos(elev) * dist
+    );
+  }
 
-  // Night / dusk factor (0 in bright afternoon, 1 at twilight)
-  nightFactor = hour > 18.0 ? Math.min(1, (hour - 18.0) / 2.2) : hour < 7.2 ? Math.min(1, (7.2 - hour) / 1.5) : 0;
-  const goldenFactor = Math.max(
-    hour > 16.5 && hour < 20.0 ? 1 - Math.abs(hour - 18.25) / 1.75 : 0,
-    hour < 8.5 ? 1 - Math.abs(hour - 6.8) / 1.7 : 0
-  );
+  // Night / dusk factor (0 in bright afternoon, 1 at true night)
+  nightFactor = isNight
+    ? 1
+    : hour > 18.0
+      ? Math.min(1, (hour - 18.0) / 1.5)
+      : hour < 7.5
+        ? Math.min(1, (7.5 - hour) / 1.3)
+        : 0;
+  const goldenFactor = isNight
+    ? 0
+    : Math.max(
+        hour > 16.5 && hour < 19.5 ? 1 - Math.abs(hour - 18.1) / 1.6 : 0,
+        hour < 8.5 ? 1 - Math.abs(hour - 6.9) / 1.6 : 0
+      );
 
   const dayTop = isWinter ? new THREE.Color(0x8ca9c4) : new THREE.Color(0x3a82d4);
   const dayHor = isWinter ? new THREE.Color(0xd5e3ef) : new THREE.Color(0xc2e2fa);
   const goldenTop = new THREE.Color(0x4a5991);
   const goldenHor = isWinter ? new THREE.Color(0xe0bcb6) : new THREE.Color(0xf5aa78);
-  const nightTop = new THREE.Color(0x0b1426);
-  const nightHor = new THREE.Color(0x1f304d);
+  const nightTop = isWinter ? new THREE.Color(0x0a1324) : new THREE.Color(0x050914);
+  const nightHor = isWinter ? new THREE.Color(0x0f1a30) : new THREE.Color(0x091022);
 
   const topCol = dayTop.clone().lerp(goldenTop, goldenFactor * 0.7).lerp(nightTop, nightFactor);
   const horCol = dayHor.clone().lerp(goldenHor, goldenFactor * 0.72).lerp(nightHor, nightFactor);
@@ -443,31 +510,62 @@ function updateDaylight(hour) {
 
   scene.background.copy(horCol);
   scene.fog.color.copy(horCol);
-  scene.fog.density = (isWinter ? 0.00058 : 0.00044) + nightFactor * (isWinter ? 0.00045 : 0.0004);
+  scene.fog.density = (isWinter ? 0.00058 : 0.00044) + nightFactor * (isWinter ? 0.00038 : 0.00034);
 
   cloudMat.color.copy(
     new THREE.Color(isWinter ? 0xe8eff7 : 0xffffff)
       .lerp(new THREE.Color(0xffcfa8), goldenFactor * 0.65)
-      .lerp(new THREE.Color(0x30415c), nightFactor * 0.85)
+      .lerp(new THREE.Color(isWinter ? 0x1e2c45 : 0x162036), nightFactor * 0.92)
   );
-  cloudMat.opacity = isWinter ? 0.92 : 0.86 - nightFactor * 0.35;
+  cloudMat.opacity = isNight ? (isWinter ? 0.36 : 0.28) : isWinter ? 0.92 : 0.86 - nightFactor * 0.35;
   sunDiscMat.color.copy(new THREE.Color(0xfff5c4).lerp(new THREE.Color(0xff9c54), goldenFactor));
-  sunDisc.visible = nightFactor < 0.85;
+  sunDisc.visible = !isNight && nightFactor < 0.85;
+  stars.visible = isNight;
 
-  const sunCol = new THREE.Color(isWinter ? 0xf5f8ff : 0xfff5e0).lerp(
+  const daySunCol = new THREE.Color(isWinter ? 0xf5f8ff : 0xfff5e0).lerp(
     new THREE.Color(isWinter ? 0xffb38a : 0xff9f59),
     goldenFactor * 0.85
   );
-  sunLight.color.copy(sunCol);
-  sunLight.intensity = Math.max(0.28, (isWinter ? 1.85 : 2.25) * (1 - nightFactor * 0.85));
-  hemiLight.color.setHex(isWinter ? 0xddebf7 : 0xdff0ff);
-  hemiLight.groundColor.setHex(isWinter ? 0x9fb2c4 : 0x677a54);
-  hemiLight.intensity = (isWinter ? 1.05 : 0.92) * (1 - nightFactor * 0.66) + 0.18;
+  const moonCol = new THREE.Color(isWinter ? 0xb4ccf5 : 0x9ab8e8);
+  sunLight.color.copy(daySunCol).lerp(moonCol, nightFactor);
+  sunLight.intensity = isNight
+    ? isWinter ? 0.42 : 0.34
+    : Math.max(0.35, (isWinter ? 1.85 : 2.25) * (1 - nightFactor * 0.8));
+
+  const dayHemiSky = new THREE.Color(isWinter ? 0xddebf7 : 0xdff0ff);
+  const nightHemiSky = new THREE.Color(isWinter ? 0x4b6899 : 0x354d7a);
+  const dayHemiGnd = new THREE.Color(isWinter ? 0x9fb2c4 : 0x677a54);
+  const nightHemiGnd = new THREE.Color(isWinter ? 0x223047 : 0x121926);
+  hemiLight.color.copy(dayHemiSky).lerp(nightHemiSky, nightFactor);
+  hemiLight.groundColor.copy(dayHemiGnd).lerp(nightHemiGnd, nightFactor);
+  hemiLight.intensity = isNight
+    ? isWinter ? 0.32 : 0.24
+    : (isWinter ? 1.05 : 0.92) * (1 - nightFactor * 0.68) + 0.16;
+
+  ambientLight.color.setHex(isNight ? (isWinter ? 0x2b3e60 : 0x1f2f4d) : 0xffffff);
+  ambientLight.intensity = isNight ? (isWinter ? 0.16 : 0.12) : isWinter ? 0.10 : 0.08;
+
+  worldSetNightMode(isNight);
+  heroSetNightMode(isNight);
 
   if (lampBulbMesh) {
-    lampBulbMesh.material.emissiveIntensity =
-      (isWinter ? 0.45 : 0.05) + nightFactor * (isWinter ? 3.2 : 2.4) + (isChristmas ? 0.6 : 0);
+    lampBulbMesh.material.emissiveIntensity = isNight
+      ? 2.2 + (isChristmas ? 0.25 : 0)
+      : 0.15 + nightFactor * 2.05;
   }
+}
+
+if (modeDayBtn) {
+  modeDayBtn.addEventListener('click', () => {
+    timeSlider.value = '14.5';
+    updateDaylight(14.5);
+  });
+}
+if (modeNightBtn) {
+  modeNightBtn.addEventListener('click', () => {
+    timeSlider.value = '22.0';
+    updateDaylight(22.0);
+  });
 }
 timeSlider.addEventListener('input', () => updateDaylight(parseFloat(timeSlider.value)));
 updateDaylight(14.5);
@@ -551,6 +649,7 @@ function applyWinterMode(active) {
   worldSetWinterMode(isWinter);
   heroSetWinterMode(isWinter);
   simulation.setWinterMode(isWinter);
+  playerChar.setWinterMode?.(isWinter);
   snowMesh.visible = isWinter;
   updateDaylight(parseFloat(timeSlider.value));
 }
@@ -1040,6 +1139,7 @@ function animate(now) {
   sunLight.position.copy(sunLight.target.position).add(sunLight.userData.offset);
 
   skyDome.position.set(camera.position.x, 0, camera.position.z);
+  stars.position.set(camera.position.x, 0, camera.position.z);
   sunDisc.position.copy(camera.position).addScaledVector(sunLight.userData.offset, 6.2);
   sunDisc.lookAt(camera.position);
 
@@ -1072,7 +1172,10 @@ function animate(now) {
     hero2646.pinGroup.rotation.y = now * 0.0014;
   }
 
-  updateSnowfall(dt, now * 0.001);
+  const elapsedSec = now * 0.001;
+  updateSnowfall(dt, elapsedSec);
+  updateChimneySmoke(dt, elapsedSec, isWinter);
+  updateHeroSmoke(dt, elapsedSec, isWinter);
   const playerPos = camMode === 'char'
     ? { x: charState.x, z: charState.z }
     : camMode === 'walk'

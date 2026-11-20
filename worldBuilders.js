@@ -44,9 +44,13 @@ function polyBBox(pts) {
   return [minX, maxX, minZ, maxZ];
 }
 
-// --- Winter Mode & Christmas Mode Registry ---
+// --- Winter Mode, Night Mode, Christmas Mode & Chimney Smoke Registry ---
 const winterHandlers = [];
+const nightHandlers = [];
 let christmasGroup = null;
+const chimneyTops = []; // [x, y, z, phase, speed]
+let chimneySmokeMesh = null;
+const PUFFS_PER_CHIMNEY = 4;
 
 function registerMaterialSwap(mat, summerProps, winterProps) {
   winterHandlers.push((isWinter) => {
@@ -71,6 +75,10 @@ function registerWinterToggle(fn) {
   winterHandlers.push(fn);
 }
 
+function registerNightToggle(fn) {
+  nightHandlers.push(fn);
+}
+
 /**
  * Toggles Winter Mode across all world terrain, roads, roofs, trees, hedges & grass tufts.
  */
@@ -81,12 +89,64 @@ export function setWinterMode(isWinter) {
 }
 
 /**
- * Toggles Christmas Mode (lights, garlands, wreaths, Christmas trees, festive shop windows) across the neighbourhood.
+ * Toggles Night Mode across neighborhood windows, porch sconces, streetlamps, light pools & Christmas lights.
+ */
+export function setNightMode(isNight) {
+  const night = !!isNight;
+  for (let i = 0; i < nightHandlers.length; i++) {
+    nightHandlers[i](night);
+  }
+}
+
+/**
+ * Toggles Christmas Mode (lights, garlands, wreaths, Christmas trees, snowmen, candy canes, gifts, festive shop windows) across the neighbourhood.
  */
 export function setChristmasMode(isChristmas) {
   if (christmasGroup) {
     christmasGroup.visible = !!isChristmas;
   }
+}
+
+/**
+ * Animates rising voxel chimney smoke puffs across neighbourhood houses in Winter / Christmas Mode.
+ */
+export function updateChimneySmoke(dt, elapsedSec, isWinter) {
+  if (!chimneySmokeMesh) return;
+  if (!isWinter) {
+    if (chimneySmokeMesh.visible) chimneySmokeMesh.visible = false;
+    return;
+  }
+  chimneySmokeMesh.visible = true;
+  const arr = chimneySmokeMesh.instanceMatrix.array;
+  const tSec = elapsedSec || 0;
+  let idx = 0;
+  for (let c = 0; c < chimneyTops.length; c++) {
+    const ch = chimneyTops[c];
+    const cx = ch[0];
+    const cy = ch[1];
+    const cz = ch[2];
+    const phase = ch[3];
+    const speed = ch[4];
+    for (let p = 0; p < PUFFS_PER_CHIMNEY; p++) {
+      const life = (tSec * speed + phase + p / PUFFS_PER_CHIMNEY) % 1.0;
+      const fadeIn = life < 0.16 ? life / 0.16 : 1.0;
+      const fadeOut = life > 0.78 ? Math.max(0.01, (1.0 - life) / 0.22) : 1.0;
+      const sc = (0.48 + life * 1.45) * fadeIn * fadeOut;
+
+      const swayPhase = tSec * 1.15 + phase * 6.283 + p * 1.7;
+      const px = cx + life * 2.65 + Math.sin(swayPhase) * 0.26 * life;
+      const py = cy + 0.22 + life * 5.4;
+      const pz = cz + life * 1.35 + Math.cos(swayPhase * 0.85) * 0.22 * life;
+
+      const o = idx * 16;
+      arr[o] = sc;      arr[o + 1] = 0;  arr[o + 2] = 0;  arr[o + 3] = 0;
+      arr[o + 4] = 0;   arr[o + 5] = sc; arr[o + 6] = 0;  arr[o + 7] = 0;
+      arr[o + 8] = 0;   arr[o + 9] = 0;  arr[o + 10] = sc; arr[o + 11] = 0;
+      arr[o + 12] = px; arr[o + 13] = py; arr[o + 14] = pz; arr[o + 15] = 1;
+      idx++;
+    }
+  }
+  chimneySmokeMesh.instanceMatrix.needsUpdate = true;
 }
 
 /**
@@ -334,6 +394,7 @@ function buildVoxelTreePrototypes() {
  */
 export function buildGroundAndLanduse(scene, DATA, texLib) {
   winterHandlers.length = 0;
+  nightHandlers.length = 0;
   const elevData = DATA.elevation;
 
   // Finely subdivided sloped terrain mesh with pixel-art grassTex / snowTex
@@ -480,7 +541,7 @@ export function buildGroundAndLanduse(scene, DATA, texLib) {
     scene.add(m);
   }
 
-  return { ringMesh, setWinterMode, setChristmasMode };
+  return { ringMesh, setWinterMode, setChristmasMode, setNightMode };
 }
 
 /**
@@ -752,6 +813,8 @@ export function buildRoadNetwork(scene, DATA, texLib) {
  */
 export function buildNeighborhoodBuildings(scene, DATA, texLib) {
   const elevData = DATA.elevation;
+  chimneyTops.length = 0;
+  chimneySmokeMesh = null;
   const HERO_SKIP_IDS = new Set([
     827707358, // 2646 Rue des Cormiers
     827707311, // 2638 Rue des Cormiers
@@ -1091,20 +1154,27 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
         }
       }
 
-      // Brick chimney on ~45% of houses
-      if (b.style !== 'garage_shed' && b.cidx % 9 < 4) {
+      // Brick chimney on ~45% of houses (and record world-space top for winter chimney smoke)
+      if (b.style !== 'garage_shed' && b.style !== 'barn' && b.style !== 'commercial' && b.cidx % 9 < 4) {
         const chSign = b.cidx % 2 === 0 ? 1 : -1;
-        const sideExt = Math.min(b.w * 0.34, Math.abs(getPolySideV(localPts, 0, chSign, b.w * 0.5)) - 0.55);
-        if (sideExt > 1.2) {
+        const polySide = Math.abs(getPolySideV(localPts, 0, chSign, b.w * 0.5)) - 0.55;
+        const sideExt = Math.min(b.w * 0.34, Math.max(0.55, polySide));
+        if (sideExt > 0.5) {
           const [chx, chz] = toWorld(-b.d * 0.12, chSign * sideExt);
+          const chH = roofH + 1.15;
+          const chBaseY = roofY - 0.15;
           transformAndPush(
-            boxWorldUV(0.75, roofH + 1.15, 0.75),
+            boxWorldUV(0.75, chH, 0.75),
             chx,
-            roofY + (roofH + 1.15) * 0.5 - 0.15,
+            chBaseY + chH * 0.5,
             chz,
             rotY,
             brickBuckets[3]
           );
+          const chTopY = chBaseY + chH;
+          const phase = ((b.cidx * 0.317 + Math.abs(chx) * 0.013 + Math.abs(chz) * 0.017) % 1.0);
+          const speed = 0.16 + ((b.cidx % 7) * 0.014);
+          chimneyTops.push([chx, chTopY, chz, phase, speed]);
         }
       }
 
@@ -1493,11 +1563,29 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
     { map: texLib.snowRoofTex, color: 0xeef5fc, roughness: 0.85 }
   );
   spawnBucket(flatRoofGeos, flatRoofMat);
-  spawnBucket(
-    windowGeos,
-    new THREE.MeshStandardMaterial({ map: texLib.windowTex || null, color: 0xffffff, roughness: 0.22, metalness: 0.28 }),
-    false
-  );
+  const windowMat = new THREE.MeshStandardMaterial({
+    map: texLib.windowTex || null,
+    color: 0xffffff,
+    emissive: 0x000000,
+    emissiveIntensity: 0,
+    roughness: 0.22,
+    metalness: 0.28,
+  });
+  registerNightToggle((isNight) => {
+    if (isNight) {
+      windowMat.map = texLib.windowLitTex || texLib.windowTex || null;
+      windowMat.emissive.setHex(0xffb84d);
+      windowMat.emissiveIntensity = 0.72;
+      windowMat.roughness = 0.35;
+    } else {
+      windowMat.map = texLib.windowTex || null;
+      windowMat.emissive.setHex(0x000000);
+      windowMat.emissiveIntensity = 0;
+      windowMat.roughness = 0.22;
+    }
+    windowMat.needsUpdate = true;
+  });
+  spawnBucket(windowGeos, windowMat, false);
   spawnBucket(
     garageDoorGeos,
     new THREE.MeshStandardMaterial({ map: texLib.garageDoorTex || null, color: 0xffffff, roughness: 0.48, metalness: 0.15 }),
@@ -1506,11 +1594,11 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
   spawnBucket(roofTrimGeos, new THREE.MeshStandardMaterial({ color: 0xf2f4f2, roughness: 0.52 }), false);
   spawnBucket(trimGeos, new THREE.MeshStandardMaterial({ color: 0xeaebea, roughness: 0.6 }), false);
   spawnBucket(railingGeos, new THREE.MeshStandardMaterial({ color: 0x24282e, metalness: 0.55, roughness: 0.42 }), false);
-  spawnBucket(
-    sconceGeos,
-    new THREE.MeshStandardMaterial({ color: 0xffe4a0, emissive: 0xffb84d, emissiveIntensity: 0.65, roughness: 0.3 }),
-    false
-  );
+  const sconceMat = new THREE.MeshStandardMaterial({ color: 0xffe4a0, emissive: 0xffb84d, emissiveIntensity: 0.65, roughness: 0.3 });
+  registerNightToggle((isNight) => {
+    sconceMat.emissiveIntensity = isNight ? 1.55 : 0.65;
+  });
+  spawnBucket(sconceGeos, sconceMat, false);
   spawnBucket(binBlueGeos, new THREE.MeshStandardMaterial({ color: 0x1c65b8, roughness: 0.65 }), false);
   spawnBucket(binGreenGeos, new THREE.MeshStandardMaterial({ color: 0x3a6b35, roughness: 0.65 }), false);
   spawnBucket(binBlackGeos, new THREE.MeshStandardMaterial({ color: 0x22262a, roughness: 0.65 }), false);
@@ -1549,6 +1637,28 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
     scene.add(fbFlowerMesh);
     registerWinterToggle((isWinter) => {
       fbFlowerMesh.visible = !isWinter;
+    });
+  }
+
+  if (chimneyTops.length > 0) {
+    const puffGeo = new THREE.BoxGeometry(0.56, 0.46, 0.56);
+    const puffMat = new THREE.MeshLambertMaterial({
+      color: 0xe8eff6,
+      transparent: true,
+      opacity: 0.46,
+      depthWrite: false,
+    });
+    chimneySmokeMesh = new THREE.InstancedMesh(puffGeo, puffMat, chimneyTops.length * PUFFS_PER_CHIMNEY);
+    chimneySmokeMesh.visible = false;
+    chimneySmokeMesh.frustumCulled = false;
+    chimneySmokeMesh.castShadow = false;
+    chimneySmokeMesh.receiveShadow = false;
+    scene.add(chimneySmokeMesh);
+    // Initialize puff matrices once so first winter frame has valid transforms
+    updateChimneySmoke(0, 0, true);
+    chimneySmokeMesh.visible = false;
+    registerWinterToggle((isWinter) => {
+      if (chimneySmokeMesh) chimneySmokeMesh.visible = !!isWinter;
     });
   }
 
@@ -2468,6 +2578,35 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
     const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff0c2, emissive: 0xffc864, emissiveIntensity: 0.05 });
     lampBulbMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 0.12, 0.25), bulbMat, polePlacements.length);
 
+    // Soft warm radial light-pool glow discs on the ground beneath streetlamps (visible only at Night)
+    const poolCanvas = document.createElement('canvas');
+    poolCanvas.width = 64;
+    poolCanvas.height = 64;
+    const poolCtx = poolCanvas.getContext('2d');
+    const poolGrad = poolCtx.createRadialGradient(32, 32, 2, 32, 32, 30);
+    poolGrad.addColorStop(0.0, 'rgba(255, 226, 152, 0.92)');
+    poolGrad.addColorStop(0.38, 'rgba(255, 198, 96, 0.48)');
+    poolGrad.addColorStop(0.75, 'rgba(255, 174, 66, 0.14)');
+    poolGrad.addColorStop(1.0, 'rgba(255, 160, 48, 0.0)');
+    poolCtx.fillStyle = poolGrad;
+    poolCtx.fillRect(0, 0, 64, 64);
+    const poolTex = new THREE.CanvasTexture(poolCanvas);
+    poolTex.colorSpace = THREE.SRGBColorSpace;
+
+    const lampPoolGeo = new THREE.PlaneGeometry(7.6, 7.6);
+    lampPoolGeo.rotateX(-Math.PI / 2);
+    const lampPoolMat = new THREE.MeshBasicMaterial({
+      map: poolTex,
+      color: 0xffd584,
+      transparent: true,
+      opacity: 0.48,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const lampPoolInst = new THREE.InstancedMesh(lampPoolGeo, lampPoolMat, polePlacements.length);
+    lampPoolInst.visible = false;
+    lampPoolInst.frustumCulled = false;
+
     const transformerPoles = polePlacements.filter((_, idx) => idx % 3 === 0);
     const guyPoles = polePlacements.filter((_, idx) => idx % 4 === 0);
     const transformerInst = transformerPoles.length > 0
@@ -2501,9 +2640,18 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       dummy.updateMatrix();
       armInst.setMatrixAt(i, dummy.matrix);
 
-      dummy.position.set(p.x - p.outX * 1.95, elev + 7.12, p.z - p.outZ * 1.95);
+      const lx = p.x - p.outX * 1.95;
+      const lz = p.z - p.outZ * 1.95;
+      dummy.position.set(lx, elev + 7.12, lz);
       dummy.updateMatrix();
       lampBulbMesh.setMatrixAt(i, dummy.matrix);
+
+      const poolElev = sampleElevation(lx, lz, elevData);
+      dummy.position.set(lx, poolElev + 0.15, lz);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      lampPoolInst.setMatrixAt(i, dummy.matrix);
     });
     if (transformerInst) {
       transformerPoles.forEach((p, i) => {
@@ -2525,7 +2673,11 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       });
       scene.add(guyGuardInst);
     }
-    scene.add(poleInst, crossInst, armInst, lampBulbMesh);
+    scene.add(poleInst, crossInst, armInst, lampBulbMesh, lampPoolInst);
+    registerNightToggle((isNight) => {
+      bulbMat.emissiveIntensity = isNight ? 2.4 : 0.05;
+      lampPoolInst.visible = isNight;
+    });
   }
 
   if (hydrantPlacements.length > 0) {
@@ -4092,13 +4244,45 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
   christmasGroup.visible = false;
 
   const xmasBulbs = []; // [x, y, z, colIdx]
+  const xmasOrnaments = []; // [x, y, z, colIdx]
   const xmasGarlands = []; // [x, y, z, ry, len]
   const xmasWreaths = []; // [x, y, z, ry]
   const xmasTrees = []; // [x, z, sc]
+  const xmasSnowmen = []; // [x, z, ry, sc]
+  const xmasCandyCanes = []; // [x, z, ry, sc]
+  const xmasGifts = []; // [x, z, ry, w, h, d, boxColIdx, ribColIdx]
   const xmasShopWindows = []; // [x, y, z, ry]
   const xmasShopSigns = []; // [x, y, z, ry]
 
-  // 1. House eaves, porches, doors, front-yard Christmas trees & balconies
+  const addTreeClusterProps = (tx, tz, sc, baseRy, countGifts = 3, countCanes = 2) => {
+    // Cluster colorful wrapped gift boxes under/beside the Christmas tree
+    for (let g = 0; g < countGifts; g++) {
+      const ang = baseRy + g * ((Math.PI * 2) / countGifts) + (rand() - 0.5) * 0.45;
+      const rad = (0.78 + rand() * 0.55) * Math.min(1.25, sc);
+      const gx = tx + Math.cos(ang) * rad;
+      const gz = tz + Math.sin(ang) * rad;
+      if (Math.hypot(gx, gz) < 1035 && isClearForProp(gx, gz, 0.35, true)) {
+        const w = 0.38 + rand() * 0.34;
+        const h = 0.32 + rand() * 0.34;
+        const d = 0.38 + rand() * 0.34;
+        const boxColIdx = Math.floor(rand() * 5);
+        const ribColIdx = (boxColIdx + 1 + Math.floor(rand() * 2)) % 3;
+        xmasGifts.push([gx, gz, rand() * Math.PI, w, h, d, boxColIdx, ribColIdx]);
+      }
+    }
+    // Giant red-and-white striped candy canes flanking the tree
+    for (let c = 0; c < countCanes; c++) {
+      const ang = baseRy + (c === 0 ? 0.55 : -0.55) + (rand() - 0.5) * 0.25;
+      const rad = (1.35 + rand() * 0.45) * Math.min(1.2, sc);
+      const cx = tx + Math.cos(ang) * rad;
+      const cz = tz + Math.sin(ang) * rad;
+      if (Math.hypot(cx, cz) < 1035 && isClearForProp(cx, cz, 0.45, true)) {
+        xmasCandyCanes.push([cx, cz, baseRy + (c === 0 ? 0.35 : -0.35), 0.92 + rand() * 0.28]);
+      }
+    }
+  };
+
+  // 1. House eaves, gables, porches, doors, front-yard Christmas trees, snowmen, candy canes, gifts & balconies
   for (const b of DATA.buildings) {
     if (HERO_SKIP_IDS.has(b.id) || b.style === 'hero_2646' || b.style === 'school_samare' || b.style === 'garage_shed' || b.style === 'barn') continue;
     const elev = sampleElevation(b.obbCx, b.obbCz, elevData);
@@ -4114,79 +4298,165 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       const eaveY = elev + foundH + wallH;
       const frontU = commSign * (b.d * 0.5 + 0.16);
 
-      // Commercial shopfront eaves lights & garland
-      const spanW = Math.min(b.w * 0.85, 22);
-      for (let v = -spanW * 0.5; v <= spanW * 0.5; v += 1.1) {
-        xmasBulbs.push([b.obbCx + fx * frontU + sx * v, eaveY - 0.12, b.obbCz + fz * frontU + sz * v, Math.floor(rand() * 5)]);
+      // Commercial shopfront dense eaves lights + lower canopy lights & double garlands
+      const spanW = Math.min(b.w * 0.90, 26);
+      for (let v = -spanW * 0.5; v <= spanW * 0.5; v += 0.68) {
+        const bx = b.obbCx + fx * frontU + sx * v;
+        const bz = b.obbCz + fz * frontU + sz * v;
+        xmasBulbs.push([bx, eaveY - 0.12, bz, Math.floor(rand() * 5)]);
+        if (Math.abs(v) <= spanW * 0.38) {
+          xmasBulbs.push([bx + fx * commSign * 0.12, elev + foundH + 3.18, bz + fz * commSign * 0.12, Math.floor(rand() * 5)]);
+        }
       }
-      xmasGarlands.push([b.obbCx + fx * (frontU + 0.08), elev + foundH + 3.05, b.obbCz + fz * (frontU + 0.08), rotY, Math.min(b.w * 0.55, 8)]);
-      xmasWreaths.push([b.obbCx + fx * (frontU + 0.06), elev + foundH + 1.75, b.obbCz + fz * (frontU + 0.06), rotY]);
-
-      // Decorated shop windows & holiday signs
-      for (const wv of [-b.w * 0.25, b.w * 0.25]) {
-        xmasShopWindows.push([b.obbCx + fx * (frontU + 0.05) + sx * wv, elev + foundH + 1.45, b.obbCz + fz * (frontU + 0.05) + sz * wv, rotY]);
+      xmasGarlands.push([b.obbCx + fx * (frontU + commSign * 0.08), elev + foundH + 3.05, b.obbCz + fz * (frontU + commSign * 0.08), rotY, Math.min(b.w * 0.78, 14)]);
+      xmasGarlands.push([b.obbCx + fx * (frontU + commSign * 0.06), eaveY - 0.30, b.obbCz + fz * (frontU + commSign * 0.06), rotY, Math.min(b.w * 0.72, 12)]);
+      xmasWreaths.push([b.obbCx + fx * (frontU + commSign * 0.06), elev + foundH + 1.75, b.obbCz + fz * (frontU + commSign * 0.06), rotY]);
+      if (b.w > 12) {
+        for (const wSide of [-b.w * 0.34, b.w * 0.34]) {
+          xmasWreaths.push([b.obbCx + fx * (frontU + commSign * 0.06) + sx * wSide, elev + foundH + 2.35, b.obbCz + fz * (frontU + commSign * 0.06) + sz * wSide, rotY]);
+        }
       }
-      xmasShopSigns.push([b.obbCx + fx * (frontU + 0.15), elev + foundH + 3.45, b.obbCz + fz * (frontU + 0.15), rotY]);
 
-      // Outdoor Christmas tree in front of commercial shops
-      xmasTrees.push([b.obbCx + fx * commSign * (b.d * 0.5 + 3.2) + sx * (b.w * 0.32), b.obbCz + fz * commSign * (b.d * 0.5 + 3.2) + sz * (b.w * 0.32), 1.25]);
+      // Enriched decorated shop windows across storefront & holiday signs
+      const winCount = Math.max(2, Math.min(5, Math.floor(b.w / 4.2)));
+      for (let wi = 0; wi < winCount; wi++) {
+        const wv = ((wi + 0.5) / winCount - 0.5) * (b.w * 0.76);
+        xmasShopWindows.push([b.obbCx + fx * (frontU + commSign * 0.05) + sx * wv, elev + foundH + 1.45, b.obbCz + fz * (frontU + commSign * 0.05) + sz * wv, rotY]);
+      }
+      xmasShopSigns.push([b.obbCx + fx * (frontU + commSign * 0.15), elev + foundH + 3.45, b.obbCz + fz * (frontU + commSign * 0.15), rotY]);
+      if (b.w > 14) {
+        for (const sv of [-b.w * 0.28, b.w * 0.28]) {
+          xmasShopSigns.push([b.obbCx + fx * (frontU + commSign * 0.15) + sx * sv, elev + foundH + 3.45, b.obbCz + fz * (frontU + commSign * 0.15) + sz * sv, rotY]);
+        }
+      }
+
+      // Outdoor Christmas tree + candy canes + gifts in front of commercial shops
+      const ctx = b.obbCx + fx * commSign * (b.d * 0.5 + 3.2) + sx * (b.w * 0.32);
+      const ctz = b.obbCz + fz * commSign * (b.d * 0.5 + 3.2) + sz * (b.w * 0.32);
+      if (Math.hypot(ctx, ctz) < 1030 && isClearForProp(ctx, ctz, 1.2, true)) {
+        xmasTrees.push([ctx, ctz, 1.28]);
+        addTreeClusterProps(ctx, ctz, 1.28, rotY, 4, 2);
+      }
       continue;
     }
 
     const foundH = (b.street && (b.street.includes('Tilleuls') || b.street.includes('Châteaumont'))) ? 0.65 : 0.34;
     const wallH = b.style === 'cottage_2s' ? 5.45 : b.style === 'quadruplex' ? 6.1 : b.style === 'apartments' ? 8.4 : b.style === 'splitlevel' ? 4.35 : 3.35;
     const eaveY = elev + foundH + wallH;
+    const isFlat = b.style === 'apartments' || b.style === 'modular';
+    const roofH = isFlat ? 0 : b.style === 'cottage_1_5s' ? Math.min(3.3, b.d * 0.42) : Math.min(2.6, b.d * 0.26);
 
-    // House front eaves lights (~75% of homes)
-    if (b.cidx % 4 !== 3) {
-      const eaveStep = 1.15;
-      for (let v = -b.w * 0.46; v <= b.w * 0.46; v += eaveStep) {
+    // Dense house front eaves lights (~85% of homes) + gable peak / roofline lights
+    if (b.cidx % 7 !== 6) {
+      const eaveStep = 0.72;
+      for (let v = -b.w * 0.48; v <= b.w * 0.48; v += eaveStep) {
         xmasBulbs.push([
           b.obbCx + fx * (b.d * 0.5 + 0.16) + sx * v,
           eaveY - 0.08,
           b.obbCz + fz * (b.d * 0.5 + 0.16) + sz * v,
-          (Math.floor((v + 20) * 2) + b.cidx) % 5,
+          (Math.floor((v + 20) * 2.5) + b.cidx) % 5,
         ]);
       }
-    }
-
-    // Quadruplex balconies garland & lights
-    if (b.style === 'quadruplex') {
-      for (const bv of [-b.w * 0.42, b.w * 0.42]) {
-        const gx = b.obbCx + fx * (b.d * 0.5 + 1.2) + sx * bv;
-        const gz = b.obbCz + fz * (b.d * 0.5 + 1.2) + sz * bv;
-        xmasGarlands.push([gx, elev + foundH + 3.35, gz, rotY, 2.2]);
-        xmasBulbs.push([gx, elev + foundH + 3.45, gz, 2]);
+      // Gable peak / front dormer / roof slope string lights on ~55% of pitched-roof homes
+      if (!isFlat && roofH > 0.8 && b.cidx % 9 < 5) {
+        const gSpan = Math.min(b.w * 0.44, 5.2);
+        const steps = 6;
+        for (let k = 1; k <= steps; k++) {
+          const frac = k / steps;
+          const yPeak = eaveY + frac * (roofH * 0.88);
+          for (const sideSgn of [-1, 1]) {
+            if (k === steps && sideSgn === 1) continue;
+            const vOff = sideSgn * gSpan * (1 - frac);
+            xmasBulbs.push([
+              b.obbCx + fx * (b.d * 0.5 + 0.16) + sx * vOff,
+              yPeak,
+              b.obbCz + fz * (b.d * 0.5 + 0.16) + sz * vOff,
+              (b.cidx + k + (sideSgn > 0 ? 1 : 0)) % 5,
+            ]);
+          }
+        }
       }
     }
 
-    // Porch garland & door wreath (~60% of residential homes)
-    if (b.driveway && b.cidx % 5 < 3) {
-      const livSide = (b.cidx % 2 === 0) ? 1 : -1;
-      const garSide = -livSide;
-      const entryZ = (b.cidx % 5 === 0) ? 0.0 : -garSide * (b.w * 0.08);
+    // Quadruplex & semidetached balconies garland & lights
+    if (b.style === 'quadruplex' || b.style === 'semidetached') {
+      for (const bv of [-b.w * 0.34, b.w * 0.34]) {
+        const gx = b.obbCx + fx * (b.d * 0.5 + 1.25) + sx * bv;
+        const gz = b.obbCz + fz * (b.d * 0.5 + 1.25) + sz * bv;
+        xmasGarlands.push([gx, elev + foundH + 3.35, gz, rotY, 2.5]);
+        for (let lb = -1.0; lb <= 1.0; lb += 0.65) {
+          xmasBulbs.push([gx + sx * lb, elev + foundH + 3.46, gz + sz * lb, (b.cidx + Math.round(lb * 3) + 5) % 5]);
+        }
+      }
+    }
+
+    // Determine living side vs driveway side cleanly
+    let garSide = (b.cidx % 2 === 0) ? -1 : 1;
+    if (b.driveway) {
+      const dSide = -(b.driveway[0] - b.obbCx) * fz + (b.driveway[1] - b.obbCz) * fx;
+      garSide = dSide >= 0 ? 1 : -1;
+    }
+    const livSide = -garSide;
+
+    // Porch garland, door wreath & porch-post vertical lights (~70% of residential homes)
+    if (b.driveway && b.cidx % 10 < 7) {
+      const entryZ = (b.cidx % 5 === 0) ? 0.0 : -garSide * Math.min(1.6, b.w * 0.08);
       const wx = b.obbCx + fx * (b.d * 0.5 + 0.14) + sx * entryZ;
       const wz = b.obbCz + fz * (b.d * 0.5 + 0.14) + sz * entryZ;
       xmasWreaths.push([wx, elev + foundH + 1.45, wz, rotY]);
-      xmasGarlands.push([wx + fx * 0.45, elev + foundH + 2.28, wz + fz * 0.45, rotY, 1.5]);
+      xmasGarlands.push([wx + fx * 0.48, elev + foundH + 2.30, wz + fz * 0.48, rotY, 1.75]);
+      // Festive bulbs along porch garland
+      for (const pb of [-0.65, 0, 0.65]) {
+        xmasBulbs.push([wx + fx * 0.55 + sx * pb, elev + foundH + 2.40, wz + fz * 0.55 + sz * pb, (b.cidx + Math.round(pb * 4) + 5) % 5]);
+      }
     }
 
-    // Decorated front-yard Christmas tree (~24% of detached homes)
-    if (b.driveway && b.cidx % 4 === 1) {
-      const side = (b.cidx % 2 === 0 ? 1 : -1) * (b.w * 0.35 + 1.2);
+    // Decorated front-yard evergreen Christmas tree (~36% of detached homes, collision-checked!)
+    let placedTree = false;
+    if (b.driveway && b.cidx % 11 < 4) {
+      const side = livSide * (b.w * 0.28 + 1.15);
       const tx = b.obbCx + fx * (b.d * 0.5 + 3.4) + sx * side;
       const tz = b.obbCz + fz * (b.d * 0.5 + 3.4) + sz * side;
-      if (Math.hypot(tx, tz) < 1030) xmasTrees.push([tx, tz, 0.85 + rand() * 0.35]);
+      if (Math.hypot(tx, tz) < 1030 && isClearForProp(tx, tz, 1.3, true)) {
+        const tsc = 0.85 + rand() * 0.38;
+        xmasTrees.push([tx, tz, tsc]);
+        addTreeClusterProps(tx, tz, tsc, rotY, 2 + (b.cidx % 3), (b.cidx % 2 === 0) ? 2 : 1);
+        placedTree = true;
+      }
+    }
+
+    // Cute voxel snowman on ~22% of front lawns (strictly checked with isClearForProp!)
+    if (b.driveway && b.cidx % 9 < 2) {
+      const smSide = livSide * (placedTree ? (b.w * 0.14) : (b.w * 0.26 + 0.6));
+      const smFwd = placedTree ? (b.d * 0.5 + 2.55) : (b.d * 0.5 + 3.35);
+      const smx = b.obbCx + fx * smFwd + sx * smSide;
+      const smz = b.obbCz + fz * smFwd + sz * smSide;
+      if (Math.hypot(smx, smz) < 1025 && isClearForProp(smx, smz, 0.95, true)) {
+        xmasSnowmen.push([smx, smz, rotY + (rand() - 0.5) * 0.5, 0.88 + rand() * 0.24]);
+      }
     }
   }
 
-  // 2. Park Christmas trees (Parc Gilles-Charland, Parc Ducharme, Parc Bibeau, Parc Walter-Camden)
+  // 2. Park Christmas trees, snowmen, candy canes & gifts (Parc Gilles-Charland, Parc Ducharme, Parc Bibeau, Parc Walter-Camden)
   for (const pk of DATA.parks) {
     if (!pk.pts || pk.pts.length === 0) continue;
     let cx = 0, cz = 0;
     for (const [px, pz] of pk.pts) { cx += px; cz += pz; }
     cx /= pk.pts.length; cz /= pk.pts.length;
-    xmasTrees.push([cx + 4, cz + 4, 1.55]);
+    const parkOffsets = [[4, 4, 1.55], [-6, 8, 1.25]];
+    for (const [ox, oz, sc] of parkOffsets) {
+      const tx = cx + ox;
+      const tz = cz + oz;
+      if (Math.hypot(tx, tz) < 1020 && isClearForProp(tx, tz, 1.5, true)) {
+        xmasTrees.push([tx, tz, sc]);
+        addTreeClusterProps(tx, tz, sc, rand() * Math.PI * 2, 4, 2);
+      }
+    }
+    const smx = cx + 8.2;
+    const smz = cz + 2.5;
+    if (Math.hypot(smx, smz) < 1020 && isClearForProp(smx, smz, 1.0, true)) {
+      xmasSnowmen.push([smx, smz, rand() * Math.PI * 2, 1.12]);
+    }
   }
 
   // 3. Streetlamp pole & overhead cable lights (every 2nd pole & mid-span)
@@ -4197,26 +4467,31 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
     xmasBulbs.push([p.x, p.elev + 5.2, p.z, (i + 1) % 5]);
   }
 
-  // 4. Lights on ~18% of front-yard conifers
-  for (let i = 0; i < coniferPos.length; i += 6) {
+  // 4. Lights on ~22% of front-yard conifers
+  for (let i = 0; i < coniferPos.length; i += 5) {
     const [tx, tz, sc] = coniferPos[i];
-    if (Math.hypot(tx, tz) > 750) continue;
+    if (Math.hypot(tx, tz) > 780) continue;
     const tElev = sampleElevation(tx, tz, elevData);
-    for (let k = 0; k < 5; k++) {
-      const ang = k * 1.3;
-      const rad = (1.1 - k * 0.16) * sc;
-      xmasBulbs.push([tx + Math.cos(ang) * rad, tElev + (2.0 + k * 0.72) * sc, tz + Math.sin(ang) * rad, (i + k) % 5]);
+    for (let k = 0; k < 6; k++) {
+      const ang = k * 1.15;
+      const rad = (1.12 - k * 0.14) * sc;
+      xmasBulbs.push([tx + Math.cos(ang) * rad, tElev + (1.8 + k * 0.68) * sc, tz + Math.sin(ang) * rad, (i + k) % 5]);
     }
   }
 
-  // 5. Add bulbs onto every decorated Christmas tree
+  // 5. Add dense spiraling bulbs & colorful hanging ornaments onto every decorated Christmas tree
   for (let i = 0; i < xmasTrees.length; i++) {
     const [tx, tz, sc] = xmasTrees[i];
     const tElev = sampleElevation(tx, tz, elevData);
-    for (let k = 0; k < 8; k++) {
-      const ang = k * 0.95;
-      const rad = (1.15 - k * 0.11) * sc;
-      xmasBulbs.push([tx + Math.cos(ang) * rad, tElev + (1.7 + k * 0.52) * sc, tz + Math.sin(ang) * rad, (i + k) % 5]);
+    for (let k = 0; k < 12; k++) {
+      const ang = k * 0.82;
+      const rad = (1.22 - k * 0.082) * sc;
+      xmasBulbs.push([tx + Math.cos(ang) * rad, tElev + (1.35 + k * 0.42) * sc, tz + Math.sin(ang) * rad, (i + k) % 5]);
+    }
+    for (let o = 0; o < 6; o++) {
+      const ang = o * 1.18 + 0.4;
+      const rad = (1.12 - o * 0.14) * sc;
+      xmasOrnaments.push([tx + Math.cos(ang) * rad, tElev + (1.6 + o * 0.68) * sc, tz + Math.sin(ang) * rad, (i + o) % 4]);
     }
   }
 
@@ -4238,6 +4513,29 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
     });
     if (bulbInst.instanceColor) bulbInst.instanceColor.needsUpdate = true;
     christmasGroup.add(bulbInst);
+    registerNightToggle((isNight) => {
+      if (isNight) bulbMat.color.setRGB(1.45, 1.45, 1.45);
+      else bulbMat.color.setRGB(1.0, 1.0, 1.0);
+    });
+  }
+
+  if (xmasOrnaments.length > 0) {
+    const ornGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
+    const ornMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25, metalness: 0.65 });
+    const ornInst = new THREE.InstancedMesh(ornGeo, ornMat, xmasOrnaments.length);
+    const ornPalette = [0xe62229, 0xffcf33, 0x2980eb, 0xe8eef5];
+    const col = new THREE.Color();
+    xmasOrnaments.forEach(([x, y, z, cIdx], i) => {
+      dummy.position.set(x, y, z);
+      dummy.rotation.set(0, i * 0.5, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      ornInst.setMatrixAt(i, dummy.matrix);
+      col.setHex(ornPalette[cIdx % 4]);
+      ornInst.setColorAt(i, col);
+    });
+    if (ornInst.instanceColor) ornInst.instanceColor.needsUpdate = true;
+    christmasGroup.add(ornInst);
   }
 
   if (xmasGarlands.length > 0) {
@@ -4277,11 +4575,13 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       new THREE.MeshStandardMaterial({ map: texLib.leafConiferTex, color: 0x2e7d3c, roughness: 0.85 }),
       xmasTrees.length
     );
-    const xtStar = new THREE.InstancedMesh(
-      new THREE.OctahedronGeometry(0.28, 0),
-      new THREE.MeshBasicMaterial({ color: 0xffd738 }),
-      xmasTrees.length
-    );
+    const xtStarMat = new THREE.MeshStandardMaterial({
+      color: 0xffdf4d,
+      emissive: 0xffc824,
+      emissiveIntensity: 0.75,
+      roughness: 0.25,
+    });
+    const xtStar = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.32, 0), xtStarMat, xmasTrees.length);
     xmasTrees.forEach(([x, z, sc], i) => {
       const elev = sampleElevation(x, z, elevData);
       dummy.position.set(x, elev, z);
@@ -4290,12 +4590,169 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       dummy.updateMatrix();
       xtTrunk.setMatrixAt(i, dummy.matrix);
       xtCrown.setMatrixAt(i, dummy.matrix);
-      dummy.position.set(x, elev + 6.45 * sc, z);
+      dummy.position.set(x, elev + 6.55 * sc, z);
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
       xtStar.setMatrixAt(i, dummy.matrix);
     });
     christmasGroup.add(xtTrunk, xtCrown, xtStar);
+    registerNightToggle((isNight) => {
+      xtStarMat.emissiveIntensity = isNight ? 1.85 : 0.75;
+    });
+  }
+
+  // Voxel Snowmen (3 stacked snow tiers, black top hat + coal eyes/buttons, carrot nose, red scarf)
+  if (xmasSnowmen.length > 0) {
+    const mkBox = (w, h, d, x, y, z) => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      g.translate(x, y, z);
+      return g;
+    };
+    const smBodyGeo = mergeGeometries([
+      mkBox(0.82, 0.68, 0.82, 0, 0.34, 0),
+      mkBox(0.60, 0.54, 0.60, 0, 0.92, 0),
+      mkBox(0.44, 0.42, 0.44, 0, 1.38, 0),
+    ]);
+    const smBlackGeo = mergeGeometries([
+      // Top hat brim & crown
+      mkBox(0.56, 0.08, 0.56, 0, 1.62, 0),
+      mkBox(0.36, 0.36, 0.36, 0, 1.82, 0),
+      // Coal eyes (facing +X)
+      mkBox(0.06, 0.07, 0.07, 0.23, 1.44, -0.10),
+      mkBox(0.06, 0.07, 0.07, 0.23, 1.44, 0.10),
+      // Coal buttons
+      mkBox(0.06, 0.07, 0.07, 0.31, 1.02, 0),
+      mkBox(0.06, 0.07, 0.07, 0.31, 0.86, 0),
+      mkBox(0.06, 0.07, 0.07, 0.42, 0.52, 0),
+      // Twig arms
+      mkBox(0.06, 0.06, 0.52, 0.04, 0.96, 0.48),
+      mkBox(0.06, 0.06, 0.52, 0.04, 0.96, -0.48),
+    ]);
+    const smNoseGeo = mkBox(0.24, 0.09, 0.09, 0.30, 1.35, 0);
+    const smScarfGeo = mergeGeometries([
+      mkBox(0.48, 0.12, 0.48, 0, 1.18, 0),
+      mkBox(0.11, 0.34, 0.12, 0.24, 1.00, 0.12),
+    ]);
+
+    const smBodyInst = new THREE.InstancedMesh(
+      smBodyGeo,
+      new THREE.MeshStandardMaterial({ map: texLib.snowTex, color: 0xf7fbff, roughness: 0.86 }),
+      xmasSnowmen.length
+    );
+    const smBlackInst = new THREE.InstancedMesh(
+      smBlackGeo,
+      new THREE.MeshStandardMaterial({ color: 0x1b1e22, roughness: 0.65 }),
+      xmasSnowmen.length
+    );
+    const smNoseInst = new THREE.InstancedMesh(
+      smNoseGeo,
+      new THREE.MeshStandardMaterial({ color: 0xf07818, roughness: 0.55 }),
+      xmasSnowmen.length
+    );
+    const smScarfInst = new THREE.InstancedMesh(
+      smScarfGeo,
+      new THREE.MeshStandardMaterial({ color: 0xd12026, roughness: 0.72 }),
+      xmasSnowmen.length
+    );
+
+    xmasSnowmen.forEach(([x, z, ry, sc], i) => {
+      const elev = sampleElevation(x, z, elevData);
+      dummy.position.set(x, elev, z);
+      dummy.rotation.set(0, ry, 0);
+      dummy.scale.set(sc, sc, sc);
+      dummy.updateMatrix();
+      smBodyInst.setMatrixAt(i, dummy.matrix);
+      smBlackInst.setMatrixAt(i, dummy.matrix);
+      smNoseInst.setMatrixAt(i, dummy.matrix);
+      smScarfInst.setMatrixAt(i, dummy.matrix);
+    });
+    christmasGroup.add(smBodyInst, smBlackInst, smNoseInst, smScarfInst);
+  }
+
+  // Giant Red-and-White Striped Candy Canes
+  if (xmasCandyCanes.length > 0) {
+    const mkBox = (w, h, d, x, y, z) => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      g.translate(x, y, z);
+      return g;
+    };
+    const ccWhiteGeo = mergeGeometries([
+      mkBox(0.16, 0.24, 0.16, 0, 0.12, 0),
+      mkBox(0.16, 0.24, 0.16, 0, 0.60, 0),
+      mkBox(0.16, 0.24, 0.16, 0, 1.08, 0),
+      mkBox(0.16, 0.16, 0.16, 0.18, 1.48, 0),
+      mkBox(0.16, 0.22, 0.16, 0.36, 1.24, 0),
+    ]);
+    const ccRedGeo = mergeGeometries([
+      mkBox(0.17, 0.24, 0.17, 0, 0.36, 0),
+      mkBox(0.17, 0.24, 0.17, 0, 0.84, 0),
+      mkBox(0.17, 0.22, 0.17, 0.04, 1.32, 0),
+      mkBox(0.17, 0.17, 0.17, 0.34, 1.42, 0),
+    ]);
+    const ccWhiteInst = new THREE.InstancedMesh(
+      ccWhiteGeo,
+      new THREE.MeshStandardMaterial({ color: 0xf7f9fb, roughness: 0.42 }),
+      xmasCandyCanes.length
+    );
+    const ccRedInst = new THREE.InstancedMesh(
+      ccRedGeo,
+      new THREE.MeshStandardMaterial({ color: 0xd91e26, roughness: 0.42 }),
+      xmasCandyCanes.length
+    );
+    xmasCandyCanes.forEach(([x, z, ry, sc], i) => {
+      const elev = sampleElevation(x, z, elevData);
+      dummy.position.set(x, elev, z);
+      dummy.rotation.set(0, ry, 0);
+      dummy.scale.set(sc, sc, sc);
+      dummy.updateMatrix();
+      ccWhiteInst.setMatrixAt(i, dummy.matrix);
+      ccRedInst.setMatrixAt(i, dummy.matrix);
+    });
+    christmasGroup.add(ccWhiteInst, ccRedInst);
+  }
+
+  // Colorful Wrapped Gift Boxes with Contrasting Ribbons & Bows
+  if (xmasGifts.length > 0) {
+    const mkBox = (w, h, d, x, y, z) => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      g.translate(x, y, z);
+      return g;
+    };
+    const giftBoxGeo = mkBox(1.0, 1.0, 1.0, 0, 0.5, 0);
+    const giftRibbonGeo = mergeGeometries([
+      mkBox(1.04, 1.04, 0.18, 0, 0.5, 0),
+      mkBox(0.18, 1.04, 1.04, 0, 0.5, 0),
+      mkBox(0.32, 0.16, 0.32, 0, 1.08, 0),
+    ]);
+    const giftBoxInst = new THREE.InstancedMesh(
+      giftBoxGeo,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.48 }),
+      xmasGifts.length
+    );
+    const giftRibbonInst = new THREE.InstancedMesh(
+      giftRibbonGeo,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, metalness: 0.35 }),
+      xmasGifts.length
+    );
+    const boxPalette = [0xd9232a, 0x1e8a3c, 0x2568c9, 0xe8ad25, 0x8b32b8];
+    const ribPalette = [0xffd84d, 0xf7f9fc, 0xe62930];
+    const col = new THREE.Color();
+    xmasGifts.forEach(([x, z, ry, w, h, d, bIdx, rIdx], i) => {
+      const elev = sampleElevation(x, z, elevData);
+      dummy.position.set(x, elev, z);
+      dummy.rotation.set(0, ry, 0);
+      dummy.scale.set(w, h, d);
+      dummy.updateMatrix();
+      giftBoxInst.setMatrixAt(i, dummy.matrix);
+      giftRibbonInst.setMatrixAt(i, dummy.matrix);
+      col.setHex(boxPalette[bIdx % boxPalette.length]);
+      giftBoxInst.setColorAt(i, col);
+      col.setHex(ribPalette[rIdx % ribPalette.length]);
+      giftRibbonInst.setColorAt(i, col);
+    });
+    if (giftBoxInst.instanceColor) giftBoxInst.instanceColor.needsUpdate = true;
+    if (giftRibbonInst.instanceColor) giftRibbonInst.instanceColor.needsUpdate = true;
+    christmasGroup.add(giftBoxInst, giftRibbonInst);
   }
 
   if (xmasShopWindows.length > 0) {
@@ -4332,5 +4789,5 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
 
   scene.add(christmasGroup);
 
-  return { lampBulbMesh, setWinterMode, setChristmasMode, obstacles };
+  return { lampBulbMesh, setWinterMode, setChristmasMode, setNightMode, updateChimneySmoke, obstacles };
 }

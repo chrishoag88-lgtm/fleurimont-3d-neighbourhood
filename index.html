@@ -63,11 +63,15 @@
     </label>
 
     <div class="section-label">Daylight &amp; Layers</div>
+    <div class="btn-row day-night-row">
+      <button id="mode-day" class="day-night-btn day active" type="button" title="Switch to sunny afternoon (14:30)">☀️ Day Mode</button>
+      <button id="mode-night" class="day-night-btn night" type="button" title="Switch to starry night (22:00)">🌙 Night Mode</button>
+    </div>
     <div class="slider-row">
       <label for="time-slider">Time of Day</label>
       <span id="time-display">14:30</span>
     </div>
-    <input id="time-slider" type="range" min="6" max="21.5" step="0.25" value="14.5" />
+    <input id="time-slider" type="range" min="5.5" max="23.5" step="0.25" value="14.5" />
 
     <div class="toggle-grid">
       <label class="chk"><input type="checkbox" id="chk-labels" checked /> Street &amp; Landmark Labels</label>
