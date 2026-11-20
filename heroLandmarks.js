@@ -529,12 +529,41 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   bballBoard.position.set(-2.84, 2.35, cpZ + 0.9);
   root.add(hockeyNet, bballPole, bballBoard);
 
-  // Wooden backyard privacy fence
-  const woodFenceMat = new THREE.MeshStandardMaterial({ color: 0x8e7255, roughness: 0.85 });
-  const gateFence = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.9, cpW + 0.4), woodFenceMat);
-  gateFence.position.set(-4.2, 0.95, cpZ);
-  gateFence.castShadow = true;
-  root.add(gateFence);
+  // Galvanized steel chain-link ("Frost") carport return fence & double gate (matches May 2024 Street View)
+  const galvSteelMat = new THREE.MeshStandardMaterial({ color: 0xbac4ce, metalness: 0.65, roughness: 0.36 });
+  const frostMeshMat = new THREE.MeshStandardMaterial({
+    map: texLib.chainLinkTex,
+    color: 0xffffff,
+    metalness: 0.5,
+    roughness: 0.4,
+    alphaTest: 0.42,
+    side: THREE.DoubleSide,
+  });
+  const addHeroChainLinkSpan = (x, z, len, h, rotY = 0) => {
+    const fg = new THREE.Group();
+    fg.position.set(x, 0, z);
+    fg.rotation.y = rotY;
+    const panelGeo = new THREE.PlaneGeometry(len, h - 0.08);
+    const uv = panelGeo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * len * 0.9, uv.getY(i) * (h - 0.08) * 0.9);
+    const panel = new THREE.Mesh(panelGeo, frostMeshMat);
+    panel.position.y = h * 0.5;
+    const topRail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.055, 0.055), galvSteelMat);
+    topRail.position.y = h - 0.03;
+    const botRail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.04, 0.04), galvSteelMat);
+    botRail.position.y = 0.08;
+    fg.add(panel, topRail, botRail);
+    const postCount = Math.max(2, Math.round(len / 1.9) + 1);
+    for (let pi = 0; pi < postCount; pi++) {
+      const px = -len * 0.5 + (pi / (postCount - 1)) * len;
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, h + 0.06, 6), galvSteelMat);
+      post.position.set(px, (h + 0.06) * 0.5, 0);
+      fg.add(post);
+    }
+    root.add(fg);
+  };
+  addHeroChainLinkSpan(-4.2, cpZ, cpW + 0.3, 1.55, Math.PI / 2);
+  addHeroChainLinkSpan(-4.2, -7.6, 2.3, 1.55, Math.PI / 2);
 
   // Sculpted 3-tier cedar hedges using hedgeTex + world-scaled UVs
   const hedgeMat = new THREE.MeshStandardMaterial({ map: texLib.hedgeTex, color: 0xffffff, roughness: 0.92 });
@@ -1938,15 +1967,23 @@ function addChainLinkFence(group, pts, height, elevData, closed = false, gateInd
       post.position.set(px0, e0 + height / 2, pz0);
       group.add(post);
 
-      // Top rail + wire mesh panel
+      // Top & bottom tubular rails + world-scaled diamond wire mesh panel
       const midE = (e0 + e1) / 2;
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(subLen, 0.05, 0.05), mats.steelMat);
-      rail.position.set((px0 + px1) / 2, midE + height - 0.05, (pz0 + pz1) / 2);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(subLen, 0.055, 0.055), mats.steelMat);
+      rail.position.set((px0 + px1) / 2, midE + height - 0.04, (pz0 + pz1) / 2);
       rail.rotation.y = -ang;
-      const panel = new THREE.Mesh(new THREE.PlaneGeometry(subLen, height - 0.1), mats.chainLinkMat);
+      const botRail = new THREE.Mesh(new THREE.BoxGeometry(subLen, 0.04, 0.04), mats.steelMat);
+      botRail.position.set((px0 + px1) / 2, midE + 0.08, (pz0 + pz1) / 2);
+      botRail.rotation.y = -ang;
+      const pGeo = new THREE.PlaneGeometry(subLen, height - 0.12);
+      const pUv = pGeo.attributes.uv;
+      for (let ui = 0; ui < pUv.count; ui++) {
+        pUv.setXY(ui, pUv.getX(ui) * subLen * 0.85, pUv.getY(ui) * (height - 0.12) * 0.85);
+      }
+      const panel = new THREE.Mesh(pGeo, mats.chainLinkMat);
       panel.position.set((px0 + px1) / 2, midE + height / 2, (pz0 + pz1) / 2);
       panel.rotation.y = -ang;
-      group.add(rail, panel);
+      group.add(rail, botRail, panel);
     }
     const endE = sampleElevation(x1, z1, elevData);
     const endPost = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, height, 6), mats.steelMat);
@@ -2105,11 +2142,11 @@ export function buildEcoleDeLaSamare(scene, texLib, schoolBuilding, pitches, pla
     { color: 0xd7e3ee, opacity: 0.22 }
   );
   const chainLinkMat = new THREE.MeshStandardMaterial({
-    color: 0xb8c2cc,
+    map: texLib.chainLinkTex || null,
+    color: 0xffffff,
     metalness: 0.55,
     roughness: 0.4,
-    transparent: true,
-    opacity: 0.32,
+    alphaTest: 0.42,
     side: THREE.DoubleSide,
   });
 
@@ -2380,11 +2417,11 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     side: THREE.DoubleSide,
   });
   const chainLinkMat = new THREE.MeshStandardMaterial({
-    color: 0xb8c2cc,
+    map: texLib.chainLinkTex || null,
+    color: 0xffffff,
     metalness: 0.55,
     roughness: 0.4,
-    transparent: true,
-    opacity: 0.34,
+    alphaTest: 0.42,
     side: THREE.DoubleSide,
   });
   const dirtPathMat = new THREE.MeshStandardMaterial({
@@ -2632,6 +2669,26 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
   addParkSign(-194, -240, 'PARC GILLES-CHARLAND', -0.45);
   addParkBenchAndBin(-190, -244, -0.45);
   addParkBenchAndBin(-232, -288, -0.6);
+
+  // Parc Gilles-Charland: Iconic 4-ft galvanized steel chain-link playground fence along Chemin Galvin
+  addChainLinkFence(
+    group,
+    [[-193.0, -181.6], [-170.0, -179.4]],
+    1.28,
+    elevData,
+    false,
+    new Set(),
+    parkMats
+  );
+  addChainLinkFence(
+    group,
+    [[-162.5, -178.7], [-128.0, -175.8]],
+    1.28,
+    elevData,
+    false,
+    new Set(),
+    parkMats
+  );
 
   // Parc Ducharme (-209, -512), Parc Bibeau (419, -923), & Parc Walter-Camden (517, 334)
   const otherParks = [

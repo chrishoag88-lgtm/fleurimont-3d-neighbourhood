@@ -1357,11 +1357,14 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
         );
         const [stepX, stepZ] = toWorld(entryU + 1.32, entryZ);
         transformAndPush(new THREE.BoxGeometry(0.45, 0.22, 1.55), stepX, elev + 0.11, stepZ, rotY, foundationGeos);
+        const porchRailBucket = b.cidx % 5 < 3 ? trimGeos : railingGeos;
         for (const rv of [-0.82, 0.82]) {
           const [rx, rz] = toWorld(entryU + 0.58, entryZ + rv);
-          transformAndPush(new THREE.BoxGeometry(1.1, 0.08, 0.06), rx, wallBaseY + 0.78, rz, rotY, railingGeos);
-          transformAndPush(new THREE.BoxGeometry(0.06, 0.72, 0.06), rx + cosA * 0.48, wallBaseY + 0.42, rz + sinA * 0.48, rotY, railingGeos);
-          transformAndPush(new THREE.BoxGeometry(0.06, 0.72, 0.06), rx - cosA * 0.48, wallBaseY + 0.42, rz - sinA * 0.48, rotY, railingGeos);
+          transformAndPush(new THREE.BoxGeometry(1.1, 0.08, 0.06), rx, wallBaseY + 0.78, rz, rotY, porchRailBucket);
+          transformAndPush(new THREE.BoxGeometry(1.1, 0.05, 0.05), rx, wallBaseY + 0.14, rz, rotY, porchRailBucket);
+          for (const bxOff of [-0.48, -0.24, 0, 0.24, 0.48]) {
+            transformAndPush(new THREE.BoxGeometry(0.05, 0.68, 0.05), rx + cosA * bxOff, wallBaseY + 0.46, rz + sinA * bxOff, rotY, porchRailBucket);
+          }
         }
 
         // Dark mulch patch along front foundation
@@ -1433,16 +1436,7 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
         }
       }
 
-      // Backyard wooden privacy fences on ~30% of detached lots
-      if (b.driveway && b.style !== 'modular' && b.cidx % 10 < 3) {
-        const fenceD = 9.0;
-        const [flx, flz] = toWorld(-b.d * 0.5 - fenceD * 0.5, -b.w * 0.55);
-        const [frx, frz] = toWorld(-b.d * 0.5 - fenceD * 0.5, b.w * 0.55);
-        const [fbx, fbz] = toWorld(-b.d * 0.5 - fenceD, 0);
-        transformAndPush(boxWorldUV(fenceD, 1.65, 0.14), flx, elev + 0.82, flz, rotY, woodAccentGeos);
-        transformAndPush(boxWorldUV(fenceD, 1.65, 0.14), frx, elev + 0.82, frz, rotY, woodAccentGeos);
-        transformAndPush(boxWorldUV(0.14, 1.65, b.w * 1.1), fbx, elev + 0.82, fbz, rotY, woodAccentGeos);
-      }
+      // (Residential & commercial fences are built collision-checked in buildSuburbanDetailsAndTrees)
 
       // Side wall windows (+Z and -Z faces snapped onto exact polygon side face)
       if (b.d > 6.5) {
@@ -1747,6 +1741,260 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       hInst.setMatrixAt(i, dummy.matrix);
     });
     scene.add(hInst);
+  }
+
+  // --- A1b. Authentic Fleurimont Steel Chain-Link ("Frost"), Black Steel Picket & Wood Privacy Fences + Bollards ---
+  const galvFenceSegs = [];
+  const blackFrostSegs = [];
+  const ironPicketSegs = [];
+  const woodFenceSegs = [];
+  const retainingWallSegs = [];
+  const fenceObstacles = [];
+
+  const pushFenceSpan = (bucket, x0, z0, x1, z1, height, skipPropCheck = false) => {
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    if (len < 1.2) return;
+    const mx = (x0 + x1) * 0.5;
+    const mz = (z0 + z1) * 0.5;
+    if (Math.hypot(mx, mz) > 1040) return;
+    if (!skipPropCheck) {
+      if (!isClearForProp(mx, mz, 0.35, true)) return;
+      if (!isClearForProp(x0 + (x1 - x0) * 0.18, z0 + (z1 - z0) * 0.18, 0.3, true)) return;
+      if (!isClearForProp(x0 + (x1 - x0) * 0.82, z0 + (z1 - z0) * 0.82, 0.3, true)) return;
+    }
+    const ry = -Math.atan2(z1 - z0, x1 - x0);
+    bucket.push({ x: mx, z: mz, len, h: height, ry });
+    fenceObstacles.push([mx, mz, len * 0.5, 0.22, ry]);
+  };
+
+  for (const b of DATA.buildings) {
+    if (HERO_SKIP_IDS.has(b.id) || b.style === 'garage_shed' || b.style === 'barn' || b.style === 'commercial' || b.style === 'apartments') continue;
+    const fRoll = rand();
+    if (fRoll > 0.84) continue; // ~84% of homes have a side-yard return fence/gate and/or backyard fence
+
+    // Quebec Fleurimont mix from Street View: 45% galvanized Frost, 19% black Frost, 14% black steel picket, 22% wood privacy
+    const bucket =
+      fRoll < 0.38 ? galvFenceSegs
+        : fRoll < 0.54 ? blackFrostSegs
+          : fRoll < 0.66 ? ironPicketSegs
+            : woodFenceSegs;
+    const fH = bucket === woodFenceSegs ? 1.72 : bucket === ironPicketSegs ? 1.28 : 1.48;
+
+    const fx = Math.cos(b.ang), fz = Math.sin(b.ang);
+    const sx = -fz, sz = fx;
+    const sideExt = b.w * 0.5 + 2.8 + (b.cidx % 3) * 0.45;
+    const backD = 8.2 + (b.cidx % 4) * 1.4;
+    const retU = -b.d * 0.22;
+    const rearU = -b.d * 0.5 - backD;
+
+    const pt = (u, v) => [b.obbCx + fx * u + sx * v, b.obbCz + fz * u + sz * v];
+
+    // 1. Street-visible side-yard return fences/gates from house walls out to side property lines
+    for (const sgn of [-1, 1]) {
+      const [ax, az] = pt(retU, sgn * (b.w * 0.5 + 0.25));
+      const [bx, bz] = pt(retU, sgn * sideExt);
+      pushFenceSpan(bucket, ax, az, bx, bz, fH);
+    }
+
+    // 2. Backyard side & rear perimeter fence enclosure
+    for (const sgn of [-1, 1]) {
+      const [ax, az] = pt(retU, sgn * sideExt);
+      const [bx, bz] = pt(rearU, sgn * sideExt);
+      pushFenceSpan(bucket, ax, az, bx, bz, fH);
+    }
+    const [rx0, rz0] = pt(rearU, -sideExt);
+    const [rx1, rz1] = pt(rearU, sideExt);
+    pushFenceSpan(bucket, rx0, rz0, rx1, rz1, fH);
+  }
+
+  // Commercial Rue King Est rear/residential-facing retaining walls + galvanized chain-link fences (May 2024 Street View)
+  for (const pk of DATA.parkings) {
+    if (!pk.pts || pk.pts.length < 4) continue;
+    const cz = pk.pts.reduce((s, q) => s + q[1], 0) / pk.pts.length;
+    if (cz > -550) continue;
+    for (let i = 0; i < pk.pts.length; i++) {
+      const [x0, z0] = pk.pts[i];
+      const [x1, z1] = pk.pts[(i + 1) % pk.pts.length];
+      // Place retaining wall + chain-link along south/rear residential edges (z > cz + 4)
+      if ((z0 + z1) * 0.5 < cz + 4) continue;
+      const segLen = Math.hypot(x1 - x0, z1 - z0);
+      if (segLen < 6) continue;
+      const mx = (x0 + x1) * 0.5, mz = (z0 + z1) * 0.5;
+      if (!isClearOfHardscape(mx, mz, 0.1)) {
+        // Still allow right on parking lot perimeter edge as long as it's not on a road
+        let nearRoad = false;
+        for (let r = 0; r < roadBoxes.length; r++) {
+          const rb = roadBoxes[r];
+          if (mx >= rb.bbox[0] - rb.hw && mx <= rb.bbox[1] + rb.hw && mz >= rb.bbox[2] - rb.hw && mz <= rb.bbox[3] + rb.hw) {
+            nearRoad = true;
+            break;
+          }
+        }
+        if (nearRoad) continue;
+      }
+      const ry = -Math.atan2(z1 - z0, x1 - x0);
+      retainingWallSegs.push({ x: mx, z: mz, len: segLen, h: 1.15, ry });
+      galvFenceSegs.push({ x: mx, z: mz, len: segLen, h: 1.65, ry, yOff: 1.15 });
+      fenceObstacles.push([mx, mz, segLen * 0.5, 0.35, ry]);
+    }
+  }
+
+  // Instantiate all 4 fence styles with crisp world-scaled panels + tubular/wood posts & top rails
+  const spawnFenceStyle = (segs, panelMat, postMat, postThickness = 0.07, panelThick = 0.04, isSolidWood = false) => {
+    if (segs.length === 0) return;
+    const pGeo = isSolidWood ? new THREE.BoxGeometry(1, 1, panelThick) : new THREE.PlaneGeometry(1, 1);
+    const pInst = new THREE.InstancedMesh(pGeo, panelMat, segs.length);
+    pInst.castShadow = isSolidWood;
+    pInst.receiveShadow = true;
+
+    const railGeo = new THREE.BoxGeometry(1, 0.06, 0.06);
+    const railInst = new THREE.InstancedMesh(railGeo, postMat, segs.length);
+
+    // Collect post positions along every fence span (~every 3.0m)
+    const posts = [];
+    segs.forEach((sg, i) => {
+      const baseElev = sampleElevation(sg.x, sg.z, elevData) + (sg.yOff || 0);
+      dummy.position.set(sg.x, baseElev + sg.h * 0.5, sg.z);
+      dummy.rotation.set(0, sg.ry, 0);
+      dummy.scale.set(sg.len, sg.h - 0.06, 1);
+      dummy.updateMatrix();
+      pInst.setMatrixAt(i, dummy.matrix);
+
+      dummy.position.set(sg.x, baseElev + sg.h - 0.03, sg.z);
+      dummy.rotation.set(0, sg.ry, 0);
+      dummy.scale.set(sg.len, 1, 1);
+      dummy.updateMatrix();
+      railInst.setMatrixAt(i, dummy.matrix);
+
+      const pCount = Math.max(2, Math.min(8, Math.round(sg.len / 3.0) + 1));
+      const cR = Math.cos(-sg.ry), sR = Math.sin(-sg.ry);
+      for (let pi = 0; pi < pCount; pi++) {
+        const off = -sg.len * 0.5 + (pi / (pCount - 1)) * sg.len;
+        posts.push([sg.x + cR * off, baseElev, sg.z + sR * off, sg.h + 0.06]);
+      }
+    });
+    scene.add(pInst, railInst);
+
+    if (posts.length > 0) {
+      const postGeo = new THREE.BoxGeometry(postThickness, 1, postThickness);
+      const postInst = new THREE.InstancedMesh(postGeo, postMat, posts.length);
+      posts.forEach(([px, py, pz, ph], idx) => {
+        dummy.position.set(px, py + ph * 0.5, pz);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, ph, 1);
+        dummy.updateMatrix();
+        postInst.setMatrixAt(idx, dummy.matrix);
+      });
+      scene.add(postInst);
+    }
+  };
+
+  const galvPanelTex = texLib.chainLinkTex.clone();
+  galvPanelTex.needsUpdate = true;
+  galvPanelTex.repeat.set(4.5, 1.3);
+  const galvPostMat = new THREE.MeshStandardMaterial({ color: 0xbac4ce, metalness: 0.65, roughness: 0.36 });
+  const galvPanelMat = new THREE.MeshStandardMaterial({
+    map: galvPanelTex,
+    color: 0xffffff,
+    metalness: 0.52,
+    roughness: 0.4,
+    alphaTest: 0.42,
+    side: THREE.DoubleSide,
+  });
+  spawnFenceStyle(galvFenceSegs, galvPanelMat, galvPostMat, 0.065, 0.04, false);
+
+  const blackFrostTex = texLib.blackChainLinkTex.clone();
+  blackFrostTex.needsUpdate = true;
+  blackFrostTex.repeat.set(4.5, 1.3);
+  const blackSteelPostMat = new THREE.MeshStandardMaterial({ color: 0x22272e, metalness: 0.55, roughness: 0.42 });
+  const blackFrostMat = new THREE.MeshStandardMaterial({
+    map: blackFrostTex,
+    color: 0xffffff,
+    metalness: 0.45,
+    roughness: 0.45,
+    alphaTest: 0.42,
+    side: THREE.DoubleSide,
+  });
+  spawnFenceStyle(blackFrostSegs, blackFrostMat, blackSteelPostMat, 0.065, 0.04, false);
+
+  const ironTex = texLib.ironPicketTex.clone();
+  ironTex.needsUpdate = true;
+  ironTex.repeat.set(4.0, 1.0);
+  const ironPicketMat = new THREE.MeshStandardMaterial({
+    map: ironTex,
+    color: 0x262c34,
+    metalness: 0.62,
+    roughness: 0.36,
+    alphaTest: 0.42,
+    side: THREE.DoubleSide,
+  });
+  spawnFenceStyle(ironPicketSegs, ironPicketMat, blackSteelPostMat, 0.075, 0.04, false);
+
+  const woodFMat = new THREE.MeshStandardMaterial({
+    map: texLib.woodFenceTex || texLib.barkTex,
+    color: 0xffffff,
+    roughness: 0.88,
+  });
+  const woodPostMat = new THREE.MeshStandardMaterial({ color: 0x7a5b3e, roughness: 0.9 });
+  spawnFenceStyle(woodFenceSegs, woodFMat, woodPostMat, 0.11, 0.09, true);
+
+  if (retainingWallSegs.length > 0) {
+    const rwMat = new THREE.MeshStandardMaterial({ map: texLib.foundationTex || texLib.concreteTex, color: 0xc2c6c2, roughness: 0.92 });
+    const rwInst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 0.42), rwMat, retainingWallSegs.length);
+    rwInst.castShadow = true;
+    rwInst.receiveShadow = true;
+    retainingWallSegs.forEach((rw, i) => {
+      const e = sampleElevation(rw.x, rw.z, elevData);
+      dummy.position.set(rw.x, e + rw.h * 0.5, rw.z);
+      dummy.rotation.set(0, rw.ry, 0);
+      dummy.scale.set(rw.len, rw.h, 1);
+      dummy.updateMatrix();
+      rwInst.setMatrixAt(i, dummy.matrix);
+    });
+    scene.add(rwInst);
+  }
+
+  // Chemin Galvin reflective black-and-yellow bike-lane bollards (May 2024 Street View)
+  const bikeBollards = [];
+  for (const r of DATA.roads) {
+    if (!r.name || !r.name.includes('Galvin') || !r.pts || r.pts.length < 2) continue;
+    const hw = (r.width || 8) * 0.5 - 1.15;
+    for (let i = 0; i < r.pts.length - 1; i++) {
+      const [x0, z0] = r.pts[i], [x1, z1] = r.pts[i + 1];
+      const segLen = Math.hypot(x1 - x0, z1 - z0);
+      if (segLen < 12) continue;
+      const ux = (x1 - x0) / segLen, uz = (z1 - z0) / segLen;
+      const nx = -uz, nz = ux;
+      for (let d = 8; d < segLen - 8; d += 22) {
+        const bx = x0 + ux * d + nx * hw;
+        const bz = z0 + uz * d + nz * hw;
+        if (Math.hypot(bx, bz) < 1020) bikeBollards.push([bx, bz]);
+      }
+    }
+  }
+  if (bikeBollards.length > 0) {
+    const bolPostInst = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.055, 0.065, 0.88, 6),
+      new THREE.MeshStandardMaterial({ color: 0x20242a, roughness: 0.55 }),
+      bikeBollards.length
+    );
+    const bolBandInst = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.062, 0.062, 0.24, 6),
+      new THREE.MeshStandardMaterial({ color: 0xf4c824, emissive: 0x664d00, emissiveIntensity: 0.25, roughness: 0.35 }),
+      bikeBollards.length
+    );
+    bikeBollards.forEach(([bx, bz], i) => {
+      const e = sampleElevation(bx, bz, elevData);
+      dummy.position.set(bx, e + 0.44, bz);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      bolPostInst.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(bx, e + 0.68, bz);
+      dummy.updateMatrix();
+      bolBandInst.setMatrixAt(i, dummy.matrix);
+    });
+    scene.add(bolPostInst, bolBandInst);
   }
 
   // --- A2. Backyard Cabanon Sheds (~25% of detached lots, strictly clear of roads/buildings) ---
@@ -3508,11 +3756,14 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
     { map: texLib.leafConiferTex, color: 0xc6d8e8, roughness: 0.86 }
   );
 
-  // Build collision obstacles export
+  // Build collision obstacles export (includes hedges AND all steel/wood fences)
   const obstacles = {
     trees: [],
     bushes: [],
-    hedges: hedgeTransforms.map((ht) => [ht.x, ht.z, ht.sx * 0.5, ht.sz * 0.5, ht.ry]),
+    hedges: [
+      ...hedgeTransforms.map((ht) => [ht.x, ht.z, ht.sx * 0.5, ht.sz * 0.5, ht.ry]),
+      ...fenceObstacles,
+    ],
     parkedCars: parkedVehicles.map((pv) => [pv.x, pv.z, 2.1, 0.91, pv.ry]),
   };
 

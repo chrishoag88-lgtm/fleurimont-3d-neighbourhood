@@ -891,6 +891,63 @@ export function createTextureLibrary() {
   }
   const mulchTex = toTex(mlc, 1, 1);
 
+  // 32. Galvanized Steel Chain-Link ("Frost") Diamond Wire Mesh (32x32 alpha cutout)
+  const makeChainLink = (wireCol, glintCol, shadeCol) => {
+    const [cc, cctx] = makeCanvas(32, 32);
+    cctx.clearRect(0, 0, 32, 32);
+    for (let y = 0; y < 32; y++) {
+      for (let x = 0; x < 32; x++) {
+        const d1 = (x + y) % 8;
+        const d2 = (x - y + 32) % 8;
+        if (d1 === 0 || d2 === 0) {
+          cctx.fillStyle = (d1 === 0 && d2 === 0) ? glintCol : ((x + y) % 16 === 0 ? shadeCol : wireCol);
+          cctx.fillRect(x, y, 1, 1);
+        }
+      }
+    }
+    return toTex(cc, 1, 1);
+  };
+  const chainLinkTex = makeChainLink('#b6c2ce', '#eef5fc', '#7b8794');
+  const blackChainLinkTex = makeChainLink('#282e35', '#4c5560', '#161a1f');
+
+  // 33. Ornamental Steel / Aluminum Vertical Picket Fence & Railing (32x32 alpha cutout)
+  const [ipc, ipctx] = makeCanvas(32, 32);
+  ipctx.clearRect(0, 0, 32, 32);
+  ipctx.fillStyle = '#e8edf2';
+  ipctx.fillRect(0, 1, 32, 2);   // top rail
+  ipctx.fillRect(0, 28, 32, 2);  // bottom rail
+  for (let x = 2; x < 32; x += 4) {
+    ipctx.fillStyle = '#dfe5eb';
+    ipctx.fillRect(x, 1, 1, 29); // vertical steel pickets
+    ipctx.fillStyle = '#ffffff';
+    ipctx.fillRect(x, 0, 1, 1);  // picket finial tip
+  }
+  const ironPicketTex = toTex(ipc, 1, 1);
+
+  // 34. Vertical Weathered Cedar / Pressure-Treated Wood Privacy Fence (32x32)
+  const [wfc, wfctx] = makeCanvas(32, 32);
+  const woodBoardCols = ['#9c7856', '#8f6c4c', '#a6825f', '#846243', '#967252'];
+  for (let bx = 0; bx < 32; bx += 4) {
+    const base = woodBoardCols[Math.floor(rng() * woodBoardCols.length)];
+    wfctx.fillStyle = base;
+    wfctx.fillRect(bx, 0, 3, 32);
+    // Plank seam shadow
+    wfctx.fillStyle = '#4e3927';
+    wfctx.fillRect(bx + 3, 0, 1, 32);
+    // Subtle wood grain streaks
+    for (let gy = 0; gy < 32; gy++) {
+      if (rng() < 0.25) {
+        wfctx.fillStyle = rng() < 0.5 ? 'rgba(0,0,0,0.10)' : 'rgba(255,255,255,0.06)';
+        wfctx.fillRect(bx + (gy % 3), gy, 1, 2);
+      }
+    }
+  }
+  // Horizontal rail shadow bands
+  wfctx.fillStyle = 'rgba(40,26,14,0.22)';
+  wfctx.fillRect(0, 5, 32, 2);
+  wfctx.fillRect(0, 25, 32, 2);
+  const woodFenceTex = toTex(wfc, 1, 1);
+
   return {
     grassTex,
     snowTex,
@@ -927,6 +984,10 @@ export function createTextureLibrary() {
     poleWoodTex,
     forestFloorTex,
     mulchTex,
+    chainLinkTex,
+    blackChainLinkTex,
+    ironPicketTex,
+    woodFenceTex,
     makeBannerTexture(text, bg, fg, w = 256, h = 64) {
       const [c, ctx] = makeCanvas(w, h);
       ctx.fillStyle = bg;
