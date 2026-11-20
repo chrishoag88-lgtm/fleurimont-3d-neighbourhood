@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2646 Rue des Cormiers — Fleurimont, Sherbrooke, QC (3D Neighbourhood)</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <!-- Top-left Header & Camera Controls -->
+  <div id="hud-left" class="hud-panel">
+    <div class="hud-header">
+      <div class="badge-qc">FLEURIMONT • SHERBROOKE, QC</div>
+      <h1>2646 Rue des Cormiers</h1>
+      <p id="stats-line" class="subtitle">Loading 1 km neighbourhood…</p>
+    </div>
+
+    <div class="section-label">Camera Mode</div>
+    <div class="btn-row mode-row">
+      <button id="mode-orbit" class="mode-btn active" data-mode="orbit" title="Left-drag orbit, Right-drag pan, Scroll zoom, WASD move">Orbit</button>
+      <button id="mode-char" class="mode-btn" data-mode="char" title="3rd-person little character: WASD walk, Shift sprint, Space jump, Drag orbit">Character</button>
+      <button id="mode-walk" class="mode-btn" data-mode="walk" title="Eye-level 1.7m walk: WASD + Drag to look">Street Walk</button>
+      <button id="mode-fly" class="mode-btn" data-mode="fly" title="Free 3D flight: WASD + Q/E + Shift boost">Drone Fly</button>
+    </div>
+    <div id="controls-hint" class="hint-text">
+      Left-drag: Orbit • Right-drag: Pan • Scroll: Zoom • Click building: Inspect
+    </div>
+
+    <div class="section-label">Quick-Jump Landmarks</div>
+    <div class="landmark-grid">
+      <button class="lm-btn active" data-lm="home2646">🏠 2646 Rue des Cormiers</button>
+      <button class="lm-btn" data-lm="cormiersStreet">🛣️ Cormiers (Street View)</button>
+      <button class="lm-btn" data-lm="samare">🏫 École de la Samare</button>
+      <button class="lm-btn" data-lm="charland">🏒 Parc Gilles-Charland</button>
+      <button class="lm-btn" data-lm="ducharme">🌳 Parc Ducharme</button>
+      <button class="lm-btn" data-lm="tilleuls">🏡 Tilleuls &amp; Merisiers</button>
+      <button class="lm-btn" data-lm="kingEst">🏪 Rue King Est (Jean Coutu)</button>
+      <button class="lm-btn" data-lm="overview">🗺️ 1 km Bird's-Eye</button>
+    </div>
+
+    <div class="section-label">Season &amp; Atmosphere</div>
+    <label class="winter-toggle" for="chk-winter">
+      <input type="checkbox" id="chk-winter" />
+      <span class="winter-icon">❄️</span>
+      <span class="winter-text">Winter Mode (Snowfall &amp; Ice)</span>
+      <span class="winter-pill">OFF</span>
+    </label>
+    <label class="christmas-toggle disabled" for="chk-christmas" title="Enable Winter Mode first">
+      <input type="checkbox" id="chk-christmas" disabled />
+      <span class="christmas-icon">🎄</span>
+      <span class="christmas-text">Christmas Mode (Lights &amp; Trees)</span>
+      <span class="christmas-pill">OFF</span>
+    </label>
+
+    <div class="section-label">Daylight &amp; Layers</div>
+    <div class="slider-row">
+      <label for="time-slider">Time of Day</label>
+      <span id="time-display">14:30</span>
+    </div>
+    <input id="time-slider" type="range" min="6" max="21.5" step="0.25" value="14.5" />
+
+    <div class="toggle-grid">
+      <label class="chk"><input type="checkbox" id="chk-labels" checked /> Street &amp; Landmark Labels</label>
+      <label class="chk"><input type="checkbox" id="chk-pin" checked /> Target Pin (2646)</label>
+      <label class="chk"><input type="checkbox" id="chk-traffic" checked /> Traffic &amp; Pedestrians</label>
+      <label class="chk"><input type="checkbox" id="chk-ring" /> 1 km Radius Ring</label>
+    </div>
+  </div>
+
+  <!-- Toggle UI Collapse Button -->
+  <button id="toggle-hud" class="hud-collapse-btn" title="Hide/Show Controls">Hide UI</button>
+
+  <!-- Floating 3D Labels Overlay -->
+  <div id="labels-layer"></div>
+
+  <!-- Building / Location Inspector Card -->
+  <div id="inspector-card" class="hud-panel hidden">
+    <div class="insp-header">
+      <span id="insp-title" class="insp-title">2646 Rue des Cormiers</span>
+      <button id="insp-close" title="Close">&times;</button>
+    </div>
+    <div id="insp-body" class="insp-body"></div>
+  </div>
+
+  <!-- Bottom-right Interactive 2D Minimap -->
+  <div id="minimap-wrap" class="hud-panel">
+    <div class="minimap-title">1 km Radar (Click to Teleport)</div>
+    <canvas id="minimap" width="210" height="210"></canvas>
+    <div id="telemetry-bar" class="telemetry">0m E, 0m N • 0 FPS</div>
+  </div>
+
+  <!-- Hover Tooltip -->
+  <div id="hover-tip" class="hover-tip hidden"></div>
+
+  <script src="./neighbourhood_data.js"></script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
