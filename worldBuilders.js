@@ -394,24 +394,7 @@ export function buildGroundAndLanduse(scene, DATA, texLib) {
     scene.add(m);
   }
 
-  // Parks (yOffset = 0.032)
-  const parkGeos = DATA.parks.map((p) => createGroundPolygonGeometry(p.pts, 0.032, 0.22, elevData)).filter(Boolean);
-  const parkMerged = mergeGeometries(parkGeos);
-  if (parkMerged) {
-    const parkMat = new THREE.MeshStandardMaterial({
-      map: texLib.grassTex,
-      color: 0x90b878,
-      roughness: 0.95,
-    });
-    registerMaterialSwap(
-      parkMat,
-      { map: texLib.grassTex, color: 0x90b878, roughness: 0.95 },
-      { map: texLib.snowTex, color: 0xeef5fc, roughness: 0.88 }
-    );
-    const m = new THREE.Mesh(parkMerged, parkMat);
-    m.receiveShadow = true;
-    scene.add(m);
-  }
+  // Parks use the high-resolution terrain grass directly so large park polygons never tent above hills or clip rinks/paths
 
   // School grounds (yOffset = 0.036)
   const sgGeos = DATA.schoolGrounds.map((s) => createGroundPolygonGeometry(s.pts, 0.036, 0.22, elevData)).filter(Boolean);
@@ -541,8 +524,22 @@ export function buildRoadNetwork(scene, DATA, texLib) {
     const isCollector = r.type === 'primary' || r.type === 'tertiary' || r.name === 'Rue Allard' || r.name === 'Rue du Chalumeau';
     const isPath = r.type === 'footway' || r.type === 'path' || r.type === 'cycleway' || r.type === 'track' || r.type === 'steps';
 
-    const yRoad = isCollector ? 0.058 : isPath ? 0.052 : 0.055;
-    const g = createRibbonGeometry(r.pts, r.width, yRoad, 8, elevData);
+    const yRoad = isCollector ? 0.058 : isPath ? 0.078 : 0.055;
+    let ribbonPts = r.pts;
+    if (isPath && r.pts.length >= 2) {
+      // Subdivide long park/footway segments every ~5m so paths smoothly hug terrain hills without dipping underground
+      ribbonPts = [r.pts[0]];
+      for (let pi = 0; pi < r.pts.length - 1; pi++) {
+        const [ax, az] = r.pts[pi], [bx, bz] = r.pts[pi + 1];
+        const segLen = Math.hypot(bx - ax, bz - az);
+        const subs = Math.max(1, Math.ceil(segLen / 5.0));
+        for (let si = 1; si <= subs; si++) {
+          const t = si / subs;
+          ribbonPts.push([ax + (bx - ax) * t, az + (bz - az) * t]);
+        }
+      }
+    }
+    const g = createRibbonGeometry(ribbonPts, r.width, yRoad, 8, elevData);
     if (g) {
       if (isPath || r.type === 'service') pathGeos.push(g);
       else if (isCollector) collectorGeos.push(g);
@@ -763,6 +760,7 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
     827707441, // 387 Rue des Peupliers
     169345734, // École de la Samare
     827183553, // Dépanneur Galvin
+    827183579, // Chalet du Parc Gilles-Charland
   ]);
 
   const foundationGeos = [];
@@ -1565,7 +1563,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
   const elevData = DATA.elevation;
   const rand = seededRand(2646);
   const dummy = new THREE.Object3D();
-  const HERO_SKIP_IDS = new Set([827707358, 827707311, 827707339, 827707342, 827707441, 169345734, 827183553]);
+  const HERO_SKIP_IDS = new Set([827707358, 827707311, 827707339, 827707342, 827707441, 169345734, 827183553, 827183579]);
 
   // Precompute all hardscape, driveway, playground & building OBBs FIRST for zero-clipping placement
   const parkingBoxes = DATA.parkings.map((p) => ({ pts: p.pts, bbox: polyBBox(p.pts) }));
@@ -3323,8 +3321,9 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
     }
   }
 
-  const cleanGrass = grassPositions.filter(([x, z]) => isClearForProp(x, z, 1.1, true));
-  const cleanFlowers = flowerPositions.filter(([x, z]) => isClearForProp(x, z, 1.1, true));
+  const inCharlandCore = (x, z) => x >= -260 && x <= -120 && z >= -340 && z <= -174;
+  const cleanGrass = grassPositions.filter(([x, z]) => !inCharlandCore(x, z) && isClearForProp(x, z, 1.1, true));
+  const cleanFlowers = flowerPositions.filter(([x, z]) => !inCharlandCore(x, z) && isClearForProp(x, z, 1.1, true));
 
   // Instantiate curated dark-mulch foundation beds, variegated hostas, hydrangeas & purple lilacs
   if (foundBeds.length > 0) {

@@ -2426,23 +2426,29 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
   });
   const dirtPathMat = new THREE.MeshStandardMaterial({
     map: texLib.dirtPathTex || null,
-    color: texLib.dirtPathTex ? 0xffffff : 0x7d654d,
+    color: texLib.dirtPathTex ? 0xd8cdb8 : 0x8b765d,
     roughness: 0.94,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
   registerHeroMaterialSwap(
     dirtPathMat,
-    { map: texLib.dirtPathTex || null, color: texLib.dirtPathTex ? 0xffffff : 0x7d654d, roughness: 0.94 },
+    { map: texLib.dirtPathTex || null, color: texLib.dirtPathTex ? 0xd8cdb8 : 0x8b765d, roughness: 0.94 },
     { map: texLib.snowTex, color: 0xeaf2fa, roughness: 0.88 }
   );
   const sentierGlaceMat = new THREE.MeshStandardMaterial({
     map: texLib.dirtPathTex || null,
-    color: texLib.dirtPathTex ? 0xffffff : 0x7d654d,
+    color: texLib.dirtPathTex ? 0xcbbda4 : 0x7d654d,
     roughness: 0.92,
     metalness: 0.0,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
   registerHeroMaterialSwap(
     sentierGlaceMat,
-    { map: texLib.dirtPathTex || null, color: texLib.dirtPathTex ? 0xffffff : 0x7d654d, roughness: 0.92, metalness: 0.0 },
+    { map: texLib.dirtPathTex || null, color: texLib.dirtPathTex ? 0xcbbda4 : 0x7d654d, roughness: 0.92, metalness: 0.0 },
     { map: texLib.winterIceTex, color: 0xeaf6ff, roughness: 0.14, metalness: 0.15 }
   );
   const parkMats = { steelMat, chainLinkMat };
@@ -2496,48 +2502,111 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     group.add(board);
   };
 
+  // Smooth terrain-conforming path ribbon (subdivided every ~4m so paths never clip or float on hills)
   const addPathStrip = (pts, width, mat) => {
+    if (!pts || pts.length < 2) return;
+    const subPts = [pts[0]];
     for (let i = 0; i < pts.length - 1; i++) {
       const [x0, z0] = pts[i];
       const [x1, z1] = pts[i + 1];
-      const len = Math.hypot(x1 - x0, z1 - z0);
-      const ang = Math.atan2(z1 - z0, x1 - x0);
-      const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
-      const e = sampleElevation(mx, mz, elevData);
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(len + 0.4, 0.05, width), mat);
-      strip.position.set(mx, e + 0.04, mz);
-      strip.rotation.y = -ang;
-      strip.receiveShadow = true;
-      group.add(strip);
+      const segLen = Math.hypot(x1 - x0, z1 - z0);
+      const steps = Math.max(1, Math.ceil(segLen / 4.0));
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        subPts.push([x0 + (x1 - x0) * t, z0 + (z1 - z0) * t]);
+      }
     }
+    const geo = createRibbonGeometry(subPts, width, 0.072, 4, elevData);
+    if (!geo) return;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    group.add(mesh);
   };
 
-  // Outdoor Hockey Rink / Patinoire (169154918) at Parc Gilles-Charland
+  // Helper: map terrain-conforming polygon geometry UVs cleanly onto [0..1, 0..1] along oriented axes
+  const remapPolyUVs = (geom, cx, cz, ux, uz, vx, vz, spanU, spanV) => {
+    const pos = geom.attributes.position;
+    const uv = geom.attributes.uv;
+    if (!pos || !uv) return;
+    for (let i = 0; i < pos.count; i++) {
+      const dx = pos.getX(i) - cx;
+      const dz = pos.getZ(i) - cz;
+      const u = (dx * ux + dz * uz) / spanU + 0.5;
+      const v = (dx * vx + dz * vz) / spanV + 0.5;
+      uv.setXY(i, u, v);
+    }
+    uv.needsUpdate = true;
+  };
+
+  // Outdoor Hockey Rink / Patinoire (169154918) at Parc Gilles-Charland — terrain-conforming with zero grass clipping
   const rink = pitches.find((p) => p.kind === 'ice_rink');
   if (rink) {
     const pts = rink.pts;
-    let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
-    for (const [x, z] of pts) {
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-    }
-    const rw = maxX - minX;
-    const rd = maxZ - minZ;
-    const floorGeo = new THREE.PlaneGeometry(Math.max(rw, rd) * 0.92, Math.min(rw, rd) * 0.92);
-    floorGeo.rotateX(-Math.PI / 2);
-    const rinkMat = new THREE.MeshStandardMaterial({ map: texLib.rinkTex, roughness: 0.85 });
+    const rinkMat = new THREE.MeshStandardMaterial({
+      map: texLib.rinkTex,
+      roughness: 0.82,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
     registerHeroMaterialSwap(
       rinkMat,
-      { map: texLib.rinkTex, color: 0xffffff, roughness: 0.85, metalness: 0.0 },
+      { map: texLib.rinkTex, color: 0xffffff, roughness: 0.82, metalness: 0.0 },
       { map: texLib.winterIceTex, color: 0xffffff, roughness: 0.14, metalness: 0.12 }
     );
-    const rinkElev = sampleElevation(rink.cx, rink.cz, elevData);
+    // Subdivided terrain-hugging rink floor grid (18x8 cells, rounded corners) so zero interior terrain mounds ever poke through
+    const rAng = -0.083;
+    const ux = Math.cos(rAng), uz = Math.sin(rAng);
+    const vx = -uz, vz = ux;
+    const halfL = 25.3, halfW = 11.1, cornerR = 5.4;
+    const cols = 18, rows = 8;
+    const rPos = [], rUvs = [], rIdx = [];
+    const clampRounded = (lu, lv) => {
+      const iu = Math.max(0, Math.abs(lu) - (halfL - cornerR));
+      const iv = Math.max(0, Math.abs(lv) - (halfW - cornerR));
+      const d = Math.hypot(iu, iv);
+      if (d > cornerR) {
+        const sc = cornerR / d;
+        return [
+          Math.sign(lu) * ((halfL - cornerR) + iu * sc),
+          Math.sign(lv) * ((halfW - cornerR) + iv * sc),
+        ];
+      }
+      return [lu, lv];
+    };
+    for (let r = 0; r <= rows; r++) {
+      const vFrac = r / rows;
+      const rawV = (vFrac - 0.5) * (halfW * 2);
+      for (let c = 0; c <= cols; c++) {
+        const uFrac = c / cols;
+        const rawU = (uFrac - 0.5) * (halfL * 2);
+        const [lu, lv] = clampRounded(rawU, rawV);
+        const wx = rink.cx + ux * lu + vx * lv;
+        const wz = rink.cz + uz * lu + vz * lv;
+        const wy = sampleElevation(wx, wz, elevData) + 0.11;
+        rPos.push(wx, wy, wz);
+        rUvs.push(lu / (halfL * 2) + 0.5, lv / (halfW * 2) + 0.5);
+      }
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = r * (cols + 1) + c;
+        const b = a + 1;
+        const d = (r + 1) * (cols + 1) + c;
+        const e = d + 1;
+        rIdx.push(a, d, b, b, d, e);
+      }
+    }
+    const floorGeo = new THREE.BufferGeometry();
+    floorGeo.setAttribute('position', new THREE.Float32BufferAttribute(rPos, 3));
+    floorGeo.setAttribute('uv', new THREE.Float32BufferAttribute(rUvs, 2));
+    floorGeo.setIndex(rIdx);
+    floorGeo.computeVertexNormals();
     const floor = new THREE.Mesh(floorGeo, rinkMat);
-    floor.position.set(rink.cx, rinkElev + 0.05, rink.cz);
-    if (rd > rw) floor.rotation.y = Math.PI / 2;
     floor.receiveShadow = true;
     group.add(floor);
 
+    // Perimeter dasher boards (white + red cap rail) + tall galvanized steel chain-link safety fencing behind both goal ends
     for (let i = 0; i < pts.length; i++) {
       const [x0, z0] = pts[i];
       const [x1, z1] = pts[(i + 1) % pts.length];
@@ -2547,14 +2616,50 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
       const mz = (z0 + z1) * 0.5;
       const mElev = sampleElevation(mx, mz, elevData);
       const ang = Math.atan2(z1 - z0, x1 - x0);
-      const board = new THREE.Mesh(new THREE.BoxGeometry(segLen, 1.35, 0.16), boardMat);
-      board.position.set(mx, mElev + 0.48, mz);
+      const board = new THREE.Mesh(new THREE.BoxGeometry(segLen + 0.08, 1.32, 0.16), boardMat);
+      board.position.set(mx, mElev + 0.56, mz);
       board.rotation.y = -ang;
       board.castShadow = true;
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.1, 0.2), redCapMat);
-      cap.position.set(mx, mElev + 1.18, mz);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(segLen + 0.1, 0.1, 0.2), redCapMat);
+      cap.position.set(mx, mElev + 1.24, mz);
       cap.rotation.y = -ang;
       group.add(board, cap);
+
+      // Tall galvanized chain-link protective mesh above boards at both curved goal ends (matches May 2024 Street View)
+      const isGoalEnd = mx < -168.5 || mx > -133.5;
+      if (isGoalEnd) {
+        const netH = 2.05;
+        const pGeo = new THREE.PlaneGeometry(segLen, netH);
+        const pUv = pGeo.attributes.uv;
+        for (let ui = 0; ui < pUv.count; ui++) pUv.setXY(ui, pUv.getX(ui) * segLen * 0.85, pUv.getY(ui) * netH * 0.85);
+        const netPanel = new THREE.Mesh(pGeo, chainLinkMat);
+        netPanel.position.set(mx, mElev + 1.28 + netH * 0.5, mz);
+        netPanel.rotation.y = -ang;
+        const topBar = new THREE.Mesh(new THREE.BoxGeometry(segLen, 0.055, 0.055), steelMat);
+        topBar.position.set(mx, mElev + 1.28 + netH, mz);
+        topBar.rotation.y = -ang;
+        const endPost = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, netH + 0.1, 6), steelMat);
+        endPost.position.set(x0, sampleElevation(x0, z0, elevData) + 1.28 + netH * 0.5, z0);
+        group.add(netPanel, topBar, endPost);
+      }
+    }
+
+    // 4 Tall Rink Corner Floodlight Poles
+    for (const [fx, fz] of [
+      [-175.8, -206.0],
+      [-127.0, -202.2],
+      [-174.5, -225.2],
+      [-126.2, -221.5],
+    ]) {
+      const fe = sampleElevation(fx, fz, elevData);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 7.2, 6), postMat);
+      pole.position.set(fx, fe + 3.6, fz);
+      const lamp = new THREE.Mesh(
+        new THREE.BoxGeometry(0.75, 0.28, 0.36),
+        new THREE.MeshStandardMaterial({ color: 0xfff5d6, emissive: 0xffe49e, emissiveIntensity: 0.55 })
+      );
+      lamp.position.set(fx, fe + 7.2, fz);
+      group.add(pole, lamp);
     }
 
     // 2 Hockey Goal Cages + 2 Player Benches inside Patinoire
@@ -2564,7 +2669,7 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     ]) {
       const ge = sampleElevation(gx, gz, elevData);
       const goal = new THREE.Group();
-      goal.position.set(gx, ge + 0.05, gz);
+      goal.position.set(gx, ge + 0.08, gz);
       goal.rotation.y = rotY;
       const frame = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.22, 1.83), redCapMat);
       frame.position.set(0, 0.61, 0);
@@ -2588,50 +2693,65 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     }
   }
 
-  // Two Lit Acrylic Tennis Courts at Parc Gilles-Charland + Chain-Link Fence + Windscreens + 4 Floodlights
+  // Two Lit Acrylic Tennis Courts at Parc Gilles-Charland — terrain-conforming + diamond-mesh fences + dual windscreens
   const tennisCourts = pitches.filter((p) => p.sport === 'tennis');
-  const tennisMat = new THREE.MeshStandardMaterial({ map: texLib.tennisTex, roughness: 0.82 });
+  const tennisMat = new THREE.MeshStandardMaterial({
+    map: texLib.tennisTex,
+    roughness: 0.8,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
   registerHeroMaterialSwap(
     tennisMat,
-    { map: texLib.tennisTex, color: 0xffffff, roughness: 0.82 },
+    { map: texLib.tennisTex, color: 0xffffff, roughness: 0.8 },
     { map: texLib.snowTex, color: 0xeaf2fa, roughness: 0.88 }
   );
   for (const tc of tennisCourts) {
     const p = tc.pts;
-    const lenA = Math.hypot(p[1][0] - p[0][0], p[1][1] - p[0][1]);
-    const lenB = Math.hypot(p[2][0] - p[1][0], p[2][1] - p[1][1]);
-    const ang = Math.atan2(p[1][1] - p[0][1], p[1][0] - p[0][0]);
+    const dx01 = p[1][0] - p[0][0], dz01 = p[1][1] - p[0][1];
+    const dx03 = p[3][0] - p[0][0], dz03 = p[3][1] - p[0][1];
+    const lenA = Math.hypot(dx01, dz01);
+    const lenB = Math.hypot(dx03, dz03);
+    const ang = Math.atan2(dz01, dx01);
     const courtW = Math.min(lenA, lenB);
-    const courtL = Math.max(lenA, lenB);
     const tcElev = sampleElevation(tc.cx, tc.cz, elevData);
 
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(courtW, courtL), tennisMat);
-    plane.rotation.x = -Math.PI / 2;
-    plane.position.set(tc.cx, tcElev + 0.05, tc.cz);
-    plane.rotation.z = lenA < lenB ? -ang : -(ang - Math.PI / 2);
-    plane.receiveShadow = true;
-    group.add(plane);
+    const tcGeo = createGroundPolygonGeometry(p, 0.088, 0.04, elevData);
+    if (tcGeo) {
+      const ux = dx01 / (lenA || 1), uz = dz01 / (lenA || 1);
+      const vx = dx03 / (lenB || 1), vz = dz03 / (lenB || 1);
+      remapPolyUVs(tcGeo, tc.cx, tc.cz, ux, uz, vx, vz, lenA, lenB);
+      const courtMesh = new THREE.Mesh(tcGeo, tennisMat);
+      courtMesh.receiveShadow = true;
+      group.add(courtMesh);
+    }
 
     const netRot = lenA < lenB ? -ang : -(ang - Math.PI / 2);
     const net = new THREE.Mesh(
-      new THREE.BoxGeometry(courtW * 0.78, 0.95, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0x202428, transparent: true, opacity: 0.72 })
+      new THREE.BoxGeometry(courtW * 0.82, 0.92, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x202428, transparent: true, opacity: 0.78 })
     );
     net.position.set(tc.cx, tcElev + 0.48, tc.cz);
     net.rotation.y = netRot;
-    group.add(net);
+    const netTape = new THREE.Mesh(new THREE.BoxGeometry(courtW * 0.82, 0.08, 0.08), boardMat);
+    netTape.position.set(tc.cx, tcElev + 0.94, tc.cz);
+    netTape.rotation.y = netRot;
+    group.add(net, netTape);
 
-    // Chain-link perimeter fence + green windscreens
+    // Chain-link perimeter fence + dark green windscreens on both baseline ends
     addChainLinkFence(group, p, 3.0, elevData, true, new Set([3]), parkMats);
-    const [wx0, wz0] = p[0];
-    const [wx1, wz1] = p[1];
-    const wLen = Math.hypot(wx1 - wx0, wz1 - wz0);
-    const wAng = Math.atan2(wz1 - wz0, wx1 - wx0);
-    const wElev = sampleElevation((wx0 + wx1) / 2, (wz0 + wz1) / 2, elevData);
-    const ws = new THREE.Mesh(new THREE.PlaneGeometry(wLen, 2.2), windscreenMat);
-    ws.position.set((wx0 + wx1) / 2, wElev + 1.35, (wz0 + wz1) / 2);
-    ws.rotation.y = -wAng;
-    group.add(ws);
+    for (const [iA, iB] of [[0, 1], [2, 3]]) {
+      const [wx0, wz0] = p[iA];
+      const [wx1, wz1] = p[iB];
+      const wLen = Math.hypot(wx1 - wx0, wz1 - wz0);
+      const wAng = Math.atan2(wz1 - wz0, wx1 - wx0);
+      const wElev = sampleElevation((wx0 + wx1) / 2, (wz0 + wz1) / 2, elevData);
+      const ws = new THREE.Mesh(new THREE.PlaneGeometry(wLen, 2.2), windscreenMat);
+      ws.position.set((wx0 + wx1) / 2, wElev + 1.35, (wz0 + wz1) / 2);
+      ws.rotation.y = -wAng;
+      group.add(ws);
+    }
 
     for (const pt of p) {
       const pElev = sampleElevation(pt[0], pt[1], elevData);
@@ -2645,30 +2765,198 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
       group.add(pole, flood);
     }
   }
+  addParkBenchAndBin(-230.5, -309.0, 0.22);
 
-  // Parc Gilles-Charland: Lit Sentier Glacé Wooded Trail + Entrance Sign + Benches & Bins
+  // Hero Chalet du Parc Gilles-Charland (2515 Chemin Galvin, id=827183579)
+  const chaletX = -184.6, chaletZ = -233.5, chaletAng = 1.7508;
+  const chaletElev = sampleElevation(chaletX, chaletZ, elevData);
+  const chaletGrp = new THREE.Group();
+  chaletGrp.position.set(chaletX, chaletElev, chaletZ);
+  chaletGrp.rotation.y = -chaletAng;
+
+  const chStoneMat = new THREE.MeshStandardMaterial({ map: texLib.brickTextures[0], color: 0xd8cfc0, roughness: 0.88 });
+  const chSidingMat = new THREE.MeshStandardMaterial({ map: texLib.sidingTextures[0], color: 0xf4f5f0, roughness: 0.72 });
+  const chRoofMat = new THREE.MeshStandardMaterial({ map: texLib.shingleTextures[1] || texLib.shingleTextures[0], color: 0x52565c, roughness: 0.88 });
+  registerHeroMaterialSwap(
+    chRoofMat,
+    { map: texLib.shingleTextures[1] || texLib.shingleTextures[0], color: 0x52565c, roughness: 0.88 },
+    { map: texLib.snowRoofTex, color: 0xeef5fc, roughness: 0.84 }
+  );
+  const chTrimMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.52 });
+  const chGreenMat = new THREE.MeshStandardMaterial({ color: 0x1e4d2b, roughness: 0.58 });
+  const chWinMat = new THREE.MeshStandardMaterial({ map: texLib.windowTex, color: 0xffffff, roughness: 0.25, metalness: 0.22 });
+
+  const chFound = makeWorldBox(9.8, 1.8, 15.0, new THREE.MeshStandardMaterial({ map: texLib.foundationTex || texLib.concreteTex, color: 0xb6bbb6, roughness: 0.92 }));
+  chFound.position.set(0, -0.55, 0);
+  const chLower = makeWorldBox(9.7, 1.9, 14.9, chStoneMat, 1.8);
+  chLower.position.set(0, 0.35 + 0.95, 0);
+  chLower.castShadow = true;
+  chLower.receiveShadow = true;
+  const chUpper = makeWorldBox(9.7, 1.75, 14.9, chSidingMat);
+  chUpper.position.set(0, 2.25 + 0.875, 0);
+  chUpper.castShadow = true;
+  const chRoof = new THREE.Mesh(createPitchedRoofGeometry(9.7, 14.9, 2.15, true, 0.65), chRoofMat);
+  chRoof.position.set(0, 4.0, 0);
+  chRoof.castShadow = true;
+  const chRoofTrim = new THREE.Mesh(createRoofTrimGeometry(9.7, 14.9, 2.15, true, 0.65), chTrimMat);
+  chRoofTrim.position.copy(chRoof.position);
+  chaletGrp.add(chFound, chLower, chUpper, chRoof, chRoofTrim);
+
+  // Covered front veranda facing rink/parking (+X side) with timber columns, skate benches & chalet banner
+  const verandaDeck = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.36, 13.8), new THREE.MeshStandardMaterial({ map: texLib.concreteTex, color: 0xc2c6c2, roughness: 0.9 }));
+  verandaDeck.position.set(5.95, 0.18, 0);
+  verandaDeck.receiveShadow = true;
+  const verandaRoof = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.16, 14.4), chRoofMat);
+  verandaRoof.position.set(6.0, 3.25, 0);
+  verandaRoof.rotation.z = -0.18;
+  verandaRoof.castShadow = true;
+  chaletGrp.add(verandaDeck, verandaRoof);
+  for (const pz of [-6.4, -2.2, 2.2, 6.4]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.85, 0.18), woodMat);
+    post.position.set(6.85, 1.72, pz);
+    post.castShadow = true;
+    chaletGrp.add(post);
+  }
+  // Double entrance doors + chalet windows + municipal banner sign + skate benches + bike rack
+  const chDoor = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.25, 1.95), chGreenMat);
+  chDoor.position.set(4.88, 1.48, 0);
+  const chDoorPane = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.55, 1.45), chWinMat);
+  chDoorPane.position.set(4.9, 1.65, 0);
+  const chSignTex = texLib.makeBannerTexture('CHALET • PARC GILLES-CHARLAND', '#1e4d2b', '#f5f6f0', 440, 68);
+  const chSign = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.62, 5.4), new THREE.MeshStandardMaterial({ map: chSignTex, roughness: 0.45 }));
+  chSign.position.set(7.1, 3.05, 0);
+  chaletGrp.add(chDoor, chDoorPane, chSign);
+  for (const wz of [-4.6, 4.6]) {
+    const winF = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.25, 1.75), chGreenMat);
+    winF.position.set(4.88, 2.2, wz);
+    const winP = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.05, 1.55), chWinMat);
+    winP.position.set(4.9, 2.2, wz);
+    const benchS = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 2.2), woodMat);
+    benchS.position.set(5.55, 0.58, wz);
+    chaletGrp.add(winF, winP, benchS);
+  }
+  for (const rz of [-4.6, 0, 4.6]) {
+    const rWin = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.1, 1.5), chWinMat);
+    rWin.position.set(-4.88, 2.2, rz);
+    chaletGrp.add(rWin);
+  }
+  // Black steel bike rack outside chalet
+  for (let bi = 0; bi < 5; bi++) {
+    const hoop = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.03, 6, 10, Math.PI), postMat);
+    hoop.position.set(7.8, 0.08, 3.2 + bi * 0.52);
+    chaletGrp.add(hoop);
+  }
+  group.add(chaletGrp);
+
+  // Parc Gilles-Charland: Cohesive Terrain-Hugging Walkways + Lit Sentier Glacé Wooded Trail + Signage
   addPathStrip(
-    [
-      [-185, -245],
-      [-212, -274],
-      [-248, -296],
-      [-272, -332],
-    ],
+    [[-199.0, -246.0], [-192.0, -238.0], [-185.0, -229.0], [-180.0, -217.0], [-177.0, -206.0]],
+    2.4,
+    dirtPathMat
+  );
+  addPathStrip(
+    [[-192.0, -242.0], [-195.0, -258.0], [-199.0, -270.0]],
+    2.2,
+    dirtPathMat
+  );
+  addPathStrip(
+    [[-209.0, -286.0], [-218.0, -296.0], [-227.0, -304.0]],
+    2.2,
+    dirtPathMat
+  );
+  // Lit Sentier Glacé curving smoothly into the northern woods
+  addPathStrip(
+    [[-191.0, -258.0], [-188.5, -278.0], [-190.5, -305.0], [-194.5, -335.0], [-205.0, -355.0]],
     2.6,
     sentierGlaceMat
   );
   for (const [lx, lz] of [
-    [-188, -248],
-    [-214, -276],
-    [-246, -298],
-    [-270, -330],
-    [-196, -238],
+    [-195.0, -244.0],
+    [-193.0, -264.0],
+    [-187.5, -284.0],
+    [-190.0, -312.0],
+    [-194.0, -338.0],
+    [-216.0, -294.0],
   ]) {
     addParkLamp(lx, lz);
   }
-  addParkSign(-194, -240, 'PARC GILLES-CHARLAND', -0.45);
-  addParkBenchAndBin(-190, -244, -0.45);
-  addParkBenchAndBin(-232, -288, -0.6);
+  addParkSign(-195.5, -242.5, 'PARC GILLES-CHARLAND', -0.45);
+  addParkBenchAndBin(-192.5, -252.0, -0.2);
+  addParkBenchAndBin(-208.0, -274.0, 0.75);
+  addParkBenchAndBin(-193.0, -288.0, -1.4);
+
+  // Full-Scale Multi-Tower Playground Complex inside Parc Gilles-Charland's main curved playground (-200.0, -282.4)
+  const addLargePlaygroundComplex = (cx, cz) => {
+    const e0 = sampleElevation(cx, cz, elevData);
+    const pg = new THREE.Group();
+    pg.position.set(cx, e0, cz);
+    const blueM = new THREE.MeshStandardMaterial({ color: 0x2468b2, roughness: 0.48 });
+    const redM = new THREE.MeshStandardMaterial({ color: 0xd6392c, roughness: 0.45 });
+    const yelM = new THREE.MeshStandardMaterial({ color: 0xf2b729, roughness: 0.45 });
+    const grnM = new THREE.MeshStandardMaterial({ color: 0x2e8b47, roughness: 0.5 });
+
+    // Tower 1 (North-West, higher deck) + Tower 2 (South-East) linked by suspension bridge
+    for (const [tx, tz, hDeck, roofC] of [[-2.8, -1.2, 1.85, redM], [2.6, 0.8, 1.45, blueM]]) {
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.2, 2.4), yelM);
+      deck.position.set(tx, hDeck, tz);
+      deck.castShadow = true;
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(2.0, 1.3, 4), roofC);
+      roof.position.set(tx, hDeck + 2.35, tz);
+      roof.rotation.y = Math.PI / 4;
+      roof.castShadow = true;
+      pg.add(deck, roof);
+      for (const [px, pz] of [[-1.08, -1.08], [1.08, -1.08], [-1.08, 1.08], [1.08, 1.08]]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, hDeck + 1.85, 0.14), blueM);
+        post.position.set(tx + px, (hDeck + 1.85) * 0.5, tz + pz);
+        pg.add(post);
+      }
+      // Side safety panels
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.85, 0.1), grnM);
+      panel.position.set(tx, hDeck + 0.52, tz - 1.08);
+      pg.add(panel);
+    }
+    // Suspension bridge between towers
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.14, 1.25), woodMat);
+    bridge.position.set(-0.1, 1.65, -0.2);
+    bridge.rotation.y = -0.35;
+    bridge.rotation.z = -0.09;
+    bridge.castShadow = true;
+    // Double yellow slide off Tower 1 + red slide off Tower 2
+    const slide1 = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.14, 3.2), yelM);
+    slide1.position.set(-2.8, 1.0, 1.2);
+    slide1.rotation.x = 0.56;
+    slide1.castShadow = true;
+    const slide2 = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 2.6), redM);
+    slide2.position.set(4.5, 0.82, 0.8);
+    slide2.rotation.z = -0.52;
+    slide2.castShadow = true;
+    // Overhead monkey bars beside Tower 2
+    const mbTop = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.12, 0.9), steelMat);
+    mbTop.position.set(1.2, 2.35, -3.4);
+    for (const mx of [-0.4, 2.8]) {
+      for (const mz of [-3.8, -3.0]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.35, 0.1), grnM);
+        leg.position.set(mx, 1.18, mz);
+        pg.add(leg);
+      }
+    }
+    // See-saw + 2 colorful spring riders
+    const seesaw = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.1, 0.3), redM);
+    seesaw.position.set(-4.2, 0.65, 4.2);
+    seesaw.rotation.z = 0.14;
+    const fulcrum = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.55, 0.35), steelMat);
+    fulcrum.position.set(-4.2, 0.28, 4.2);
+    pg.add(bridge, slide1, slide2, mbTop, seesaw, fulcrum);
+    for (const [rx, rz, col] of [[-1.0, 5.2, yelM], [1.4, 5.4, blueM]]) {
+      const spring = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.45, 6), steelMat);
+      spring.position.set(rx, 0.22, rz);
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.38, 0.32), col);
+      seat.position.set(rx, 0.56, rz);
+      pg.add(spring, seat);
+    }
+    group.add(pg);
+  };
+  addLargePlaygroundComplex(-200.0, -282.4);
 
   // Parc Gilles-Charland: Iconic 4-ft galvanized steel chain-link playground fence along Chemin Galvin
   addChainLinkFence(
@@ -2758,18 +3046,18 @@ export function buildParksDetail(scene, texLib, pitches, playgrounds, leisurePro
     }
   }
 
-  // Park Playgrounds
+  // Park Playgrounds (skip main curved Parc Gilles-Charland playground which has our full multi-tower complex)
   for (const pg of playgrounds) {
-    if (Math.hypot(pg.cx - 280, pg.cz - 290) >= 60) {
-      addPlaygroundEquipment(group, pg.cx, pg.cz, pg.sub, pg.id, sampleElevation(pg.cx, pg.cz, elevData));
-    }
+    if (Math.hypot(pg.cx - 280, pg.cz - 290) < 60) continue;
+    if (Math.hypot(pg.cx - (-200.0), pg.cz - (-282.4)) < 6) continue;
+    addPlaygroundEquipment(group, pg.cx, pg.cz, pg.sub, pg.id, sampleElevation(pg.cx, pg.cz, elevData));
   }
 
   // Christmas Mode decorations for Parc Gilles-Charland (hidden by default)
   const xmasPark = new THREE.Group();
   xmasPark.visible = false;
-  const parkTreeElev = sampleElevation(-182.0, -228.0, elevData);
-  addDecoratedChristmasTree(xmasPark, -182.0, parkTreeElev, -228.0, 1.45);
+  const parkTreeElev = sampleElevation(-191.5, -245.5, elevData);
+  addDecoratedChristmasTree(xmasPark, -191.5, parkTreeElev, -245.5, 1.35);
   const rinkY = (rink ? sampleElevation(rink.cx, rink.cz, elevData) : parkTreeElev) + 1.28;
   addChristmasGarland(xmasPark, -172.5, rinkY, -205.5, -130.5, rinkY, -202.0);
   addChristmasStringLine(xmasPark, -172.5, rinkY, -226.0, -130.5, rinkY, -222.5, 0.9);
