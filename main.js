@@ -827,12 +827,26 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     if (b) {
       inspTitle.textContent = formatBuildingLabel(b);
       const dist2646 = Math.round(Math.hypot(b.cx, b.cz));
-      inspBody.innerHTML = `
-        <div class="row"><span class="k">Address</span><span class="v">${b.hn ? `${b.hn} ` : ''}${b.street || 'Fleurimont'}</span></div>
-        <div class="row"><span class="k">Style</span><span class="v">${STYLE_NAMES[b.style] || b.type}</span></div>
-        <div class="row"><span class="k">Footprint</span><span class="v">${b.w.toFixed(1)}m × ${b.d.toFixed(1)}m (${b.area} m²)</span></div>
-        <div class="row"><span class="k">Distance from 2646</span><span class="v">${dist2646} m</span></div>
-      `;
+      const rows = [
+        ['Address', `${b.hn ? `${b.hn} ` : ''}${b.street || 'Fleurimont'}`],
+        ['Style', STYLE_NAMES[b.style] || b.type],
+        ['Footprint', `${b.w.toFixed(1)}m × ${b.d.toFixed(1)}m (${b.area} m²)`],
+        ['Distance from 2646', `${dist2646} m`],
+      ];
+      inspBody.replaceChildren(
+        ...rows.map(([label, val]) => {
+          const row = document.createElement('div');
+          row.className = 'row';
+          const k = document.createElement('span');
+          k.className = 'k';
+          k.textContent = label;
+          const v = document.createElement('span');
+          v.className = 'v';
+          v.textContent = val;
+          row.append(k, v);
+          return row;
+        })
+      );
       inspCard.classList.remove('hidden');
     }
   }
@@ -960,6 +974,15 @@ let prevTime = performance.now();
 let fpsFrames = 0;
 let fpsAcc = 0;
 let currentFps = 60;
+const _tmpFwd = new THREE.Vector3();
+const _tmpRight = new THREE.Vector3();
+const _tmpLookDir = new THREE.Vector3();
+const _tmpLookTarget = new THREE.Vector3();
+const _tmpPlayerPos = { x: 0, z: 0 };
+const PIN_BASE_Y = elevAt(0, 0) + 11.4;
+let animFrameIdx = 0;
+let cloudDtAcc = 0;
+let lastTelemetryText = '';
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -989,30 +1012,29 @@ function animate(now) {
     if (glideAnim.t >= 1) glideAnim = null;
   }
 
-  // Camera movement per mode
+  // Camera movement per mode (reusing scratch vectors to avoid per-frame GC allocations)
   const boost = keysDown.has('ShiftLeft') || keysDown.has('ShiftRight') ? 2.6 : 1.0;
   if (camMode === 'orbit') {
     const panSpd = Math.max(18, camera.position.distanceTo(orbit.target) * 0.6) * dt * boost;
-    const fwd = new THREE.Vector3();
-    camera.getWorldDirection(fwd);
-    fwd.y = 0;
-    if (fwd.lengthSq() > 1e-4) fwd.normalize();
-    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    camera.getWorldDirection(_tmpFwd);
+    _tmpFwd.y = 0;
+    if (_tmpFwd.lengthSq() > 1e-4) _tmpFwd.normalize();
+    _tmpRight.set(-_tmpFwd.z, 0, _tmpFwd.x);
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) {
-      camera.position.addScaledVector(fwd, panSpd);
-      orbit.target.addScaledVector(fwd, panSpd);
+      camera.position.addScaledVector(_tmpFwd, panSpd);
+      orbit.target.addScaledVector(_tmpFwd, panSpd);
     }
     if (keysDown.has('KeyS') || keysDown.has('ArrowDown')) {
-      camera.position.addScaledVector(fwd, -panSpd);
-      orbit.target.addScaledVector(fwd, -panSpd);
+      camera.position.addScaledVector(_tmpFwd, -panSpd);
+      orbit.target.addScaledVector(_tmpFwd, -panSpd);
     }
     if (keysDown.has('KeyA') || keysDown.has('ArrowLeft')) {
-      camera.position.addScaledVector(right, -panSpd);
-      orbit.target.addScaledVector(right, -panSpd);
+      camera.position.addScaledVector(_tmpRight, -panSpd);
+      orbit.target.addScaledVector(_tmpRight, -panSpd);
     }
     if (keysDown.has('KeyD') || keysDown.has('ArrowRight')) {
-      camera.position.addScaledVector(right, panSpd);
-      orbit.target.addScaledVector(right, panSpd);
+      camera.position.addScaledVector(_tmpRight, panSpd);
+      orbit.target.addScaledVector(_tmpRight, panSpd);
     }
     orbit.update();
   } else if (camMode === 'char') {
@@ -1099,26 +1121,26 @@ function animate(now) {
       charState.z + Math.cos(walkYaw) * lookAhead
     );
   } else {
-    const lookDir = new THREE.Vector3(
+    _tmpLookDir.set(
       Math.sin(walkYaw) * Math.cos(walkPitch),
       Math.sin(walkPitch),
       Math.cos(walkYaw) * Math.cos(walkPitch)
     );
-    const flatFwd = new THREE.Vector3(Math.sin(walkYaw), 0, Math.cos(walkYaw)).normalize();
-    const flatRight = new THREE.Vector3(-flatFwd.z, 0, flatFwd.x);
+    _tmpFwd.set(Math.sin(walkYaw), 0, Math.cos(walkYaw)).normalize();
+    _tmpRight.set(-_tmpFwd.z, 0, _tmpFwd.x);
     const moveSpd = (camMode === 'walk' ? 6.5 : 32.0) * dt * boost;
 
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) {
-      camera.position.addScaledVector(camMode === 'fly' ? lookDir : flatFwd, moveSpd);
+      camera.position.addScaledVector(camMode === 'fly' ? _tmpLookDir : _tmpFwd, moveSpd);
     }
     if (keysDown.has('KeyS') || keysDown.has('ArrowDown')) {
-      camera.position.addScaledVector(camMode === 'fly' ? lookDir : flatFwd, -moveSpd);
+      camera.position.addScaledVector(camMode === 'fly' ? _tmpLookDir : _tmpFwd, -moveSpd);
     }
     if (keysDown.has('KeyA') || keysDown.has('ArrowLeft') || (camMode === 'walk' && keysDown.has('KeyQ'))) {
-      camera.position.addScaledVector(flatRight, -moveSpd);
+      camera.position.addScaledVector(_tmpRight, -moveSpd);
     }
     if (keysDown.has('KeyD') || keysDown.has('ArrowRight') || (camMode === 'walk' && keysDown.has('KeyE'))) {
-      camera.position.addScaledVector(flatRight, moveSpd);
+      camera.position.addScaledVector(_tmpRight, moveSpd);
     }
     if (camMode === 'fly') {
       const groundY = elevAt(camera.position.x, camera.position.z);
@@ -1130,7 +1152,8 @@ function animate(now) {
       camera.position.z = walkCol.z;
       camera.position.y = elevAt(camera.position.x, camera.position.z) + 1.72;
     }
-    camera.lookAt(camera.position.clone().add(lookDir));
+    _tmpLookTarget.copy(camera.position).add(_tmpLookDir);
+    camera.lookAt(_tmpLookTarget);
   }
 
   // Keep shadow frustum centered near camera view target for crisp local shadows
@@ -1143,32 +1166,38 @@ function animate(now) {
   sunDisc.position.copy(camera.position).addScaledVector(sunLight.userData.offset, 6.2);
   sunDisc.lookAt(camera.position);
 
-  for (let i = 0; i < CLOUD_COUNT; i++) {
-    const c = clouds[i];
-    c.cx += c.spd * dt;
-    if (c.cx > 1250) c.cx = -1250;
-    // Main cloud slab + 2 stepped blocky puffs
-    cloudDummy.position.set(c.cx, c.cy, c.cz);
-    cloudDummy.rotation.set(0, 0, 0);
-    cloudDummy.scale.set(c.w, c.h, c.d);
-    cloudDummy.updateMatrix();
-    cloudMesh.setMatrixAt(i * 3, cloudDummy.matrix);
+  // Update slow-drifting clouds at ~20 Hz (every 3rd frame) to reduce instanced matrix uploads
+  animFrameIdx++;
+  cloudDtAcc += dt;
+  if (animFrameIdx === 1 || animFrameIdx % 3 === 0) {
+    const cDt = cloudDtAcc;
+    cloudDtAcc = 0;
+    for (let i = 0; i < CLOUD_COUNT; i++) {
+      const c = clouds[i];
+      c.cx += c.spd * cDt;
+      if (c.cx > 1250) c.cx = -1250;
+      cloudDummy.position.set(c.cx, c.cy, c.cz);
+      cloudDummy.rotation.set(0, 0, 0);
+      cloudDummy.scale.set(c.w, c.h, c.d);
+      cloudDummy.updateMatrix();
+      cloudMesh.setMatrixAt(i * 3, cloudDummy.matrix);
 
-    cloudDummy.position.set(c.cx - c.w * 0.22, c.cy + c.h * 0.55, c.cz + c.d * 0.12);
-    cloudDummy.scale.set(c.w * 0.58, c.h * 0.72, c.d * 0.62);
-    cloudDummy.updateMatrix();
-    cloudMesh.setMatrixAt(i * 3 + 1, cloudDummy.matrix);
+      cloudDummy.position.set(c.cx - c.w * 0.22, c.cy + c.h * 0.55, c.cz + c.d * 0.12);
+      cloudDummy.scale.set(c.w * 0.58, c.h * 0.72, c.d * 0.62);
+      cloudDummy.updateMatrix();
+      cloudMesh.setMatrixAt(i * 3 + 1, cloudDummy.matrix);
 
-    cloudDummy.position.set(c.cx + c.w * 0.24, c.cy + c.h * 0.42, c.cz - c.d * 0.1);
-    cloudDummy.scale.set(c.w * 0.48, c.h * 0.65, c.d * 0.55);
-    cloudDummy.updateMatrix();
-    cloudMesh.setMatrixAt(i * 3 + 2, cloudDummy.matrix);
+      cloudDummy.position.set(c.cx + c.w * 0.24, c.cy + c.h * 0.42, c.cz - c.d * 0.1);
+      cloudDummy.scale.set(c.w * 0.48, c.h * 0.65, c.d * 0.55);
+      cloudDummy.updateMatrix();
+      cloudMesh.setMatrixAt(i * 3 + 2, cloudDummy.matrix);
+    }
+    cloudMesh.instanceMatrix.needsUpdate = true;
   }
-  cloudMesh.instanceMatrix.needsUpdate = true;
 
   // Subtle target pin bobbing
   if (hero2646.pinGroup.visible) {
-    hero2646.pinGroup.position.y = elevAt(0, 0) + 11.4 + Math.sin(now * 0.003) * 0.65;
+    hero2646.pinGroup.position.y = PIN_BASE_Y + Math.sin(now * 0.003) * 0.65;
     hero2646.pinGroup.rotation.y = now * 0.0014;
   }
 
@@ -1176,18 +1205,29 @@ function animate(now) {
   updateSnowfall(dt, elapsedSec);
   updateChimneySmoke(dt, elapsedSec, isWinter);
   updateHeroSmoke(dt, elapsedSec, isWinter);
-  const playerPos = camMode === 'char'
-    ? { x: charState.x, z: charState.z }
-    : camMode === 'walk'
-      ? { x: camera.position.x, z: camera.position.z }
-      : null;
+  let playerPos = null;
+  if (camMode === 'char') {
+    _tmpPlayerPos.x = charState.x;
+    _tmpPlayerPos.z = charState.z;
+    playerPos = _tmpPlayerPos;
+  } else if (camMode === 'walk') {
+    _tmpPlayerPos.x = camera.position.x;
+    _tmpPlayerPos.z = camera.position.z;
+    playerPos = _tmpPlayerPos;
+  }
   simulation.update(dt, isWinter ? Math.min(1, nightFactor + 0.25) : nightFactor, chkTraffic.checked, playerPos);
   updateWorldLabels();
-  updateMinimap();
+  if (animFrameIdx === 1 || animFrameIdx % 3 === 0) {
+    updateMinimap();
+  }
 
   const px = Math.round(camera.position.x);
   const pz = -Math.round(camera.position.z); // North = -Z
-  telemetryBar.textContent = `${px >= 0 ? `${px}m E` : `${-px}m W`}, ${pz >= 0 ? `${pz}m N` : `${-pz}m S`} • ${currentFps} FPS`;
+  const nextTelemetry = `${px >= 0 ? `${px}m E` : `${-px}m W`}, ${pz >= 0 ? `${pz}m N` : `${-pz}m S`} • ${currentFps} FPS`;
+  if (nextTelemetry !== lastTelemetryText) {
+    lastTelemetryText = nextTelemetry;
+    telemetryBar.textContent = nextTelemetry;
+  }
 
   renderer.render(scene, camera);
 }
