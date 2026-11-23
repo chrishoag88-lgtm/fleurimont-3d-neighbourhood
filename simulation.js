@@ -484,10 +484,12 @@ export function createCollider(DATA, obstacles = null) {
     insertItem(item, x - r, x + r, z - r, z + r);
   };
 
-  // All 2,307+ buildings (including hero 2646, Samare, Galvin)
+  // All 2,307+ buildings (skip enterable <=100m homes so hollow interiorWalls govern doorways & rooms)
+  const enterableSet = obstacles?.enterableIds instanceof Set ? obstacles.enterableIds : null;
   if (DATA && Array.isArray(DATA.buildings)) {
     for (const b of DATA.buildings) {
       if (b.obbCx == null || b.obbCz == null) continue;
+      if ((enterableSet && enterableSet.has(b.id)) || Math.hypot(b.cx, b.cz) <= 100) continue;
       const hw = (b.d || 4) * 0.5;
       const hd = (b.w || 4) * 0.5;
       const ang = b.ang || 0;
@@ -514,6 +516,16 @@ export function createCollider(DATA, obstacles = null) {
     if (Array.isArray(obstacles.parkedCars)) {
       for (const [x, z, hw, hd, ry] of obstacles.parkedCars) {
         addOBB(x, z, hw, hd, Math.cos(ry), -Math.sin(ry), 'parkedCar');
+      }
+    }
+    const wallLists = [];
+    if (Array.isArray(obstacles.interiorWalls)) wallLists.push(obstacles.interiorWalls);
+    if (Array.isArray(obstacles.wallColliders) && obstacles.wallColliders !== obstacles.interiorWalls) {
+      wallLists.push(obstacles.wallColliders);
+    }
+    for (const list of wallLists) {
+      for (const [wx, wz, halfLen, halfThick, rotY] of list) {
+        addOBB(wx, wz, halfLen, halfThick, Math.cos(rotY), -Math.sin(rotY), 'wall');
       }
     }
   }
@@ -1095,8 +1107,8 @@ export function createSimulation(scene, DATA, obstacles = null) {
           }
         }
 
-        // 7. Static parkedCars / buildings directly ahead in lane
-        if (collider.isBlocked(v.x + e.ux * 3.8, v.z + e.uz * 3.8, 0.85, ['parkedCar', 'building'])) {
+        // 7. Static parkedCars / buildings / hollow interior walls directly ahead in lane
+        if (collider.isBlocked(v.x + e.ux * 3.8, v.z + e.uz * 3.8, 0.85, ['parkedCar', 'building', 'wall'])) {
           targetSpeed = 0;
           v.braking = true;
         }

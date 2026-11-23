@@ -937,6 +937,7 @@ export function buildNeighborhoodBuildings(scene, DATA, texLib) {
 
   for (const b of DATA.buildings) {
     if (HERO_SKIP_IDS.has(b.id) || b.style === 'hero_2646' || b.style === 'school_samare') continue;
+    if (Math.hypot(b.cx, b.cz) <= 100) continue;
 
     const elev = sampleElevation(b.obbCx, b.obbCz, elevData);
     const isHillyTilleuls = b.street && (b.street.includes('Tilleuls') || b.street.includes('Châteaumont'));
@@ -1775,6 +1776,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
     if (!['cottage_2s', 'cottage_1_5s', 'bungalow_brick', 'bungalow_vinyl', 'splitlevel', 'semidetached'].includes(b.style)) {
       continue;
     }
+    const isNear100 = Math.hypot(b.cx, b.cz) <= 100;
     const hVal = rand();
     if (hVal > 0.80) continue;
     const fx = Math.cos(b.ang), fz = Math.sin(b.ang);
@@ -1792,7 +1794,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
         height,
         1.08
       );
-    } else {
+    } else if (!isNear100) {
       tryPushHedge(
         b.obbCx - fx * (b.d * 0.5 + 10.5),
         b.obbCz - fz * (b.d * 0.5 + 10.5),
@@ -1802,8 +1804,8 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
         1.08
       );
     }
-    // Side-yard front hedge return
-    if (b.driveway && rand() < 0.42) {
+    // Side-yard front hedge return (skip inside 100m enterable zone so front doorways stay completely open)
+    if (!isNear100 && b.driveway && rand() < 0.42) {
       const retSgn = rand() < 0.5 ? -1 : 1;
       tryPushHedge(
         b.obbCx + fx * (b.d * 0.18) + sx * (retSgn * (b.w * 0.5 + 2.2)),
@@ -1877,6 +1879,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
 
   for (const b of DATA.buildings) {
     if (HERO_SKIP_IDS.has(b.id) || b.style === 'garage_shed' || b.style === 'barn' || b.style === 'commercial' || b.style === 'apartments') continue;
+    if (Math.hypot(b.cx, b.cz) <= 100) continue;
     const fRoll = rand();
     if (fRoll > 0.84) continue; // ~84% of homes have a side-yard return fence/gate and/or backyard fence
 
@@ -2109,6 +2112,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
   const cabCoords = [];
   for (const b of DATA.buildings) {
     if (HERO_SKIP_IDS.has(b.id) || !b.driveway || b.style === 'modular') continue;
+    if (Math.hypot(b.cx, b.cz) <= 100) continue;
     if (rand() > 0.25) continue;
     const fx = Math.cos(b.ang), fz = Math.sin(b.ang);
     const sx = -fz, sz = fx;
@@ -2151,6 +2155,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
   const poolCoords = [];
   for (const b of DATA.buildings) {
     if (HERO_SKIP_IDS.has(b.id)) continue;
+    if (Math.hypot(b.cx, b.cz) <= 100) continue;
     if (!['cottage_2s', 'cottage_1_5s', 'bungalow_brick', 'bungalow_vinyl', 'splitlevel'].includes(b.style)) continue;
     if (rand() > 0.14) continue;
     const fx = Math.cos(b.ang), fz = Math.sin(b.ang);
@@ -3035,7 +3040,7 @@ export function buildSuburbanDetailsAndTrees(scene, DATA, texLib) {
       }
 
       // Backyard patio umbrella, BBQ grill, fire pit, deck chairs, kids' swing set, clothesline, trampoline & raised garden bed
-      if (b.style !== 'modular') {
+      if (b.style !== 'modular' && Math.hypot(b.cx, b.cz) > 100) {
         const patioSgn = (b.cidx % 2 === 0 ? 1 : -1);
         if (rand() < 0.34) {
           const ux = b.obbCx - fx * (b.d * 0.5 + 2.2) + sx * (patioSgn * b.w * 0.16);

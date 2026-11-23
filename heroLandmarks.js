@@ -10,6 +10,18 @@ import {
   createRoofTrimGeometry,
   setWorldBoxUVs,
 } from './geometryHelpers.js';
+import {
+  createHollowShell,
+  populateHouseInterior,
+  populateDetailedBackyard,
+  registerExternalEnterable,
+} from './interiors.js';
+
+function localOffsetToWorld(cx, cz, ang, lx, lz) {
+  const c = Math.cos(ang);
+  const s = Math.sin(ang);
+  return [cx + lx * c - lz * s, cz + lx * s + lz * c];
+}
 
 const heroWinterHandlers = [];
 const heroChristmasGroups = [];
@@ -748,13 +760,86 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   foundation.receiveShadow = true;
   root.add(foundation);
 
-  // Main 2-storey white horizontal vinyl cottage mass
+  // Main 2-storey white horizontal vinyl cottage mass:
+  // Ground floor (y=0.42..3.15) is HOLLOW & ENTERABLE with see-through windows & auto-opening front/back doors!
   const mainH = 5.3;
-  const mainBody = makeWorldBox(8.5, mainH, 9.5, whiteSiding);
-  mainBody.position.set(0, 0.42 + mainH / 2, -1.7);
-  mainBody.castShadow = true;
-  mainBody.receiveShadow = true;
-  root.add(mainBody);
+  const groundH2646 = 2.73;
+  const upperH2646 = mainH - groundH2646;
+  const [wCx2646, wCz2646] = localOffsetToWorld(b2646.obbCx, b2646.obbCz, b2646.ang, 0, -1.7);
+  const shell2646 = createHollowShell({
+    d: 8.5,
+    w: 9.5,
+    floorY: 0.42,
+    groundH: groundH2646,
+    upperH: 0,
+    includeRoof: false,
+    includeFoundation: false,
+    includeFrontSteps: false,
+    frontDoorZ: 2.95, // aligns with doorZ = 1.25 (1.25 - (-1.7) = 2.95)
+    frontDoorW: 1.48,
+    frontDoorH: 2.25,
+    backDoorZ: -0.5, // aligns with z = -2.2 directly onto backyard wooden deck
+    backDoorW: 1.85,
+    backDoorH: 2.20,
+    frontWindows: [{ z: -2.5, w: 2.65, yBottom: 1.08, h: 1.56 }], // aligns with front bay window at z = -4.2
+    backWindows: [
+      { z: -2.4, w: 2.0, yBottom: 1.22, h: 1.38 },
+      { z: 2.3, w: 1.8, yBottom: 1.12, h: 1.44 },
+    ],
+    sideWindows: {
+      negZ: [
+        { x: 1.4, w: 1.65, yBottom: 1.12, h: 1.42 },
+        { x: -1.6, w: 1.55, yBottom: 1.12, h: 1.42 },
+      ],
+      posZ: [{ x: -1.8, w: 1.5, yBottom: 1.12, h: 1.42 }],
+    },
+    exteriorMat: whiteSiding,
+    trimMat,
+    seed: 2646,
+    texLib,
+    worldTransform: { cx: wCx2646, cz: wCz2646, ang: b2646.ang, elev },
+  });
+  shell2646.group.position.set(0, 0, -1.7);
+  root.add(shell2646.group);
+
+  const int2646 = populateHouseInterior(shell2646.group, {
+    w: 9.5,
+    d: 8.5,
+    floorY: 0.42,
+    groundH: groundH2646,
+    seed: 2646,
+    style: 'cottage_2s',
+    frontDoorZ: 2.95,
+    backDoorZ: -0.5,
+    texLib,
+  });
+
+  registerExternalEnterable({
+    id: b2646.id || 827707358,
+    label: '2646 Rue des Cormiers',
+    cx: wCx2646,
+    cz: wCz2646,
+    ang: b2646.ang,
+    cosA: Math.cos(b2646.ang),
+    sinA: Math.sin(b2646.ang),
+    halfD: 4.25,
+    halfW: 4.75,
+    floorY: elev + 0.42,
+    ceilingY: elev + 0.42 + groundH2646,
+    wallColliders: shell2646.wallColliders,
+    doors: shell2646.doors,
+    residents: int2646.residents,
+    tvScreens: int2646.tvScreens,
+    interiorLights: int2646.interiorLights,
+    christmasGroups: [shell2646.christmasGroup, int2646.christmasGroup],
+  });
+
+  // 2nd-storey white vinyl cottage mass above hollow ground floor
+  const upperBody2646 = makeWorldBox(8.5, upperH2646, 9.5, whiteSiding);
+  upperBody2646.position.set(0, 0.42 + groundH2646 + upperH2646 / 2, -1.7);
+  upperBody2646.castShadow = true;
+  upperBody2646.receiveShadow = true;
+  root.add(upperBody2646);
 
   // Side-gable main roof + white fascia & rake trim
   const mainRoofH = 2.45;
@@ -787,15 +872,35 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   root.add(chim2646, chim2646Cap, chim2646Flue);
   registerHeroChimney(scene, root, -1.2, 9.08, -4.4);
 
-  // Right (North, -Z) projecting 2-storey front-gabled bay
+  // Right (North, -Z) projecting 2-storey front-gabled bay (hollow 1st floor w/ see-through bay window!)
   const bayD = 2.0;
   const bayW = 4.3;
   const bayZ = -4.2;
   const bayX = 4.1;
-  const bayBody = makeWorldBox(bayD, mainH, bayW, whiteSiding);
-  bayBody.position.set(bayX, 0.42 + mainH / 2, bayZ);
-  bayBody.castShadow = true;
-  root.add(bayBody);
+  const bayBodyUpper = makeWorldBox(bayD, upperH2646, bayW, whiteSiding);
+  bayBodyUpper.position.set(bayX, 0.42 + groundH2646 + upperH2646 / 2, bayZ);
+  bayBodyUpper.castShadow = true;
+  root.add(bayBodyUpper);
+
+  // Hollow 1st-floor bay projection cheeks + knee-wall + header + piers framing the wide see-through bay window
+  const bayCheekL = makeWorldBox(0.88, groundH2646, 0.24, whiteSiding);
+  bayCheekL.position.set(4.68, 0.42 + groundH2646 / 2, bayZ - bayW * 0.5 + 0.12);
+  const bayCheekR = makeWorldBox(0.88, groundH2646, 0.24, whiteSiding);
+  bayCheekR.position.set(4.68, 0.42 + groundH2646 / 2, bayZ + bayW * 0.5 - 0.12);
+  const bayApron = makeWorldBox(0.22, 0.66, bayW, whiteSiding);
+  bayApron.position.set(4.99, 0.42 + 0.33, bayZ);
+  const bayHeader = makeWorldBox(0.22, 0.50, bayW, whiteSiding);
+  bayHeader.position.set(4.99, 2.90, bayZ);
+  const bayPierL = makeWorldBox(0.22, 1.57, 0.90, whiteSiding);
+  bayPierL.position.set(4.99, 1.86, bayZ - 1.70);
+  const bayPierR = makeWorldBox(0.22, 1.57, 0.90, whiteSiding);
+  bayPierR.position.set(4.99, 1.86, bayZ + 1.70);
+  const bayFloorExt = new THREE.Mesh(
+    new THREE.BoxGeometry(0.92, 0.12, bayW - 0.48),
+    new THREE.MeshStandardMaterial({ color: 0xba8b54, roughness: 0.7 })
+  );
+  bayFloorExt.position.set(4.66, 0.38, bayZ);
+  root.add(bayCheekL, bayCheekR, bayApron, bayHeader, bayPierL, bayPierR, bayFloorExt);
 
   const bayRoof = new THREE.Mesh(createPitchedRoofGeometry(bayW, bayD + 1.8, 1.55, false, 0.32), shingleMat);
   bayRoof.rotation.y = Math.PI / 2;
@@ -834,33 +939,41 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     parent.add(wg);
   };
 
-  // 2nd storey front windows + rear windows
+  // 2nd storey front windows + rear 2nd-storey window (1st-floor windows are real see-through cutouts!)
   addWindow(root, bayX + bayD * 0.5, 4.35, bayZ, 1.75, 1.35, true);
   addWindow(root, 4.28, 4.35, 1.25, 1.5, 1.35, true);
   addWindow(root, -4.28, 4.35, -3.5, 1.4, 1.2, false);
-  addWindow(root, -4.28, 1.85, -3.5, 1.6, 1.3, false);
 
-  // Projecting 3-pane Bay Window on 1st floor of front bay (x = 5.10, y = 1.85, z = bayZ)
+  // Projecting 3-pane SEE-THROUGH Bay Window on 1st floor of front bay (x = 5.10, y = 1.85, z = bayZ)
+  const heroClearGlassMat = new THREE.MeshStandardMaterial({
+    color: 0xaad0e6,
+    roughness: 0.08,
+    metalness: 0.22,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
   const bayWinX = bayX + bayD * 0.5;
-  const bayFrameBase = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 2.38), trimMat);
+  const bayFrameBase = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 2.52), trimMat);
   bayFrameBase.position.set(bayWinX + 0.16, 1.04, bayZ);
-  const bayWinRoofCap = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.16, 2.48), shingleMat);
-  bayWinRoofCap.position.set(bayWinX + 0.18, 2.72, bayZ);
-  const bayWinCenter = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.56, 1.24), trimMat);
-  bayWinCenter.position.set(bayWinX + 0.16, 1.85, bayZ);
-  const bayWinCenterPane = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.44, 1.12), windowMat);
-  bayWinCenterPane.position.set(bayWinX + 0.34, 1.85, bayZ);
-  root.add(bayFrameBase, bayWinRoofCap, bayWinCenter, bayWinCenterPane);
+  const bayWinRoofCap = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.14, 2.58), shingleMat);
+  bayWinRoofCap.position.set(bayWinX + 0.18, 2.70, bayZ);
+  const bayWinCenterPane = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.54, 1.28), heroClearGlassMat);
+  bayWinCenterPane.position.set(bayWinX + 0.34, 1.86, bayZ);
+  root.add(bayFrameBase, bayWinRoofCap, bayWinCenterPane);
   for (const sgn of [-1, 1]) {
-    const sidePaneBox = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.52, 0.48), windowMat);
-    sidePaneBox.position.set(bayWinX + 0.12, 1.85, bayZ + sgn * 0.84);
-    sidePaneBox.rotation.y = sgn * 0.42;
+    const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.58, 0.08), trimMat);
+    mullion.position.set(bayWinX + 0.32, 1.86, bayZ + sgn * 0.64);
+    const sidePaneBox = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.54, 0.56), heroClearGlassMat);
+    sidePaneBox.position.set(bayWinX + 0.16, 1.86, bayZ + sgn * 0.90);
+    sidePaneBox.rotation.y = sgn * 0.52;
     const sh = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.58, 0.42), taupeMat);
-    sh.position.set(bayWinX + 0.03, 1.85, bayZ + sgn * 1.42);
-    root.add(sidePaneBox, sh);
+    sh.position.set(bayWinX + 0.03, 1.85, bayZ + sgn * 1.48);
+    root.add(mullion, sidePaneBox, sh);
   }
 
-  // Front Entry Door + Twin Sidelights + Stepped Concrete Stoop + Gabled Portico w/ White Pediment
+  // Front Entry Stepped Concrete Stoop + Planters + Gabled Portico (door itself is auto-opening inside shell2646!)
   const doorZ = 1.25;
   const stoop = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.95, 2.1), concreteMat);
   stoop.position.set(4.95, -0.525, doorZ);
@@ -869,19 +982,10 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   lowerStep.position.set(5.95, 0.12, doorZ);
   root.add(stoop, lowerStep);
 
-  const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.18, 1.72), trimMat);
-  doorFrame.position.set(4.28, 1.5, doorZ);
-  const doorLeaf = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.02, 0.92), trimMat);
-  doorLeaf.position.set(4.29, 1.45, doorZ);
-  const doorGlass = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.58, 0.42), windowMat);
-  doorGlass.position.set(4.3, 1.75, doorZ);
-  root.add(doorFrame, doorLeaf, doorGlass);
   for (const sgn of [-1, 1]) {
-    const sidelight = new THREE.Mesh(new THREE.BoxGeometry(0.17, 1.92, 0.26), windowMat);
-    sidelight.position.set(4.30, 1.46, doorZ + sgn * 0.65);
     const planter = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.34, 0.32), darkTrimMat);
     planter.position.set(4.65, 0.62, doorZ + sgn * 0.88);
-    root.add(sidelight, planter);
+    root.add(planter);
   }
 
   const porticoRoof = new THREE.Mesh(createPitchedRoofGeometry(2.1, 1.6, 0.72, false, 0.2), shingleMat);
@@ -1210,6 +1314,28 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     back.position.set(-6.68, 1.0, cz);
     root.add(seat, back);
   }
+  // Propane BBQ grill + patio table + colorful umbrella on 2646's rear wooden deck
+  const bbqBody = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.92, 0.95), darkTrimMat);
+  bbqBody.position.set(-5.1, 0.88, -3.7);
+  bbqBody.castShadow = true;
+  const bbqLid = new THREE.Mesh(
+    new THREE.BoxGeometry(0.52, 0.28, 0.88),
+    new THREE.MeshStandardMaterial({ color: 0xc2c8ce, metalness: 0.65, roughness: 0.32 })
+  );
+  bbqLid.position.set(-5.1, 1.46, -3.7);
+  const patioTbl = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.58, 0.07, 10), trimMat);
+  patioTbl.position.set(-6.05, 1.08, -2.2);
+  const patioStem = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.72, 6), darkTrimMat);
+  patioStem.position.set(-6.05, 0.72, -2.2);
+  const umbPole2646 = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 2.25, 6), darkTrimMat);
+  umbPole2646.position.set(-6.05, 1.56, -2.2);
+  const umbTop2646 = new THREE.Mesh(
+    new THREE.ConeGeometry(1.22, 0.52, 8),
+    new THREE.MeshStandardMaterial({ color: 0xc84b31, roughness: 0.65 })
+  );
+  umbTop2646.position.set(-6.05, 2.74, -2.2);
+  umbTop2646.castShadow = true;
+  root.add(bbqBody, bbqLid, patioTbl, patioStem, umbPole2646, umbTop2646);
 
   // --- Shared Helpers for Neighboring Standalone Hero Residences ---
   const allBuildings = (typeof window !== 'undefined' && window.NEIGHBOURHOOD_DATA?.buildings) || [];
@@ -1307,11 +1433,77 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   f2638B.position.set(-1.15, -0.5, 3.35);
   g2638.add(f2638A, f2638B);
 
-  // North 2-storey projecting mass (x: -4.53..4.54, z: -5.35..1.35)
-  const main2638 = makeWorldBox(9.07, 4.55, 6.70, blueGreySiding);
-  main2638.position.set(0.0, 0.45 + 4.55 * 0.5, -2.0);
-  main2638.castShadow = true;
-  main2638.receiveShadow = true;
+  // North 2-storey projecting mass (x: -4.53..4.54, z: -5.35..1.35): HOLLOW enterable ground floor + 2nd storey
+  const groundH2638 = 2.65;
+  const [wCx2638, wCz2638] = localOffsetToWorld(rec2638.obbCx, rec2638.obbCz, rec2638.ang, 0.0, -2.0);
+  const shell2638 = createHollowShell({
+    d: 9.07,
+    w: 6.70,
+    floorY: 0.45,
+    groundH: groundH2638,
+    upperH: 0,
+    includeRoof: false,
+    includeFoundation: false,
+    includeFrontSteps: true,
+    frontDoorZ: 1.85,
+    frontDoorW: 1.44,
+    frontDoorH: 2.20,
+    backDoorZ: 0.35,
+    backDoorW: 1.80,
+    backDoorH: 2.18,
+    frontWindows: [{ z: -1.1, w: 2.35, yBottom: 1.08, h: 1.42 }],
+    exteriorMat: blueGreySiding,
+    trimMat,
+    seed: 2638,
+    texLib,
+    worldTransform: { cx: wCx2638, cz: wCz2638, ang: rec2638.ang, elev: elev2638 },
+  });
+  shell2638.group.position.set(0.0, 0, -2.0);
+  g2638.add(shell2638.group);
+
+  const int2638 = populateHouseInterior(shell2638.group, {
+    w: 6.70,
+    d: 9.07,
+    floorY: 0.45,
+    groundH: groundH2638,
+    seed: 2638,
+    style: 'cottage_2s',
+    frontDoorZ: 1.85,
+    backDoorZ: 0.35,
+    texLib,
+  });
+  const back2638 = populateDetailedBackyard(shell2638.group, {
+    w: 6.70,
+    d: 9.07,
+    floorY: 0.45,
+    backDoorZ: 0.35,
+    seed: 2638,
+    texLib,
+  });
+  registerExternalEnterable({
+    id: 827707311,
+    label: '2638 Rue des Cormiers',
+    cx: wCx2638,
+    cz: wCz2638,
+    ang: rec2638.ang,
+    cosA: Math.cos(rec2638.ang),
+    sinA: Math.sin(rec2638.ang),
+    halfD: 9.07 * 0.5,
+    halfW: 6.70 * 0.5,
+    floorY: elev2638 + 0.45,
+    ceilingY: elev2638 + 0.45 + groundH2638,
+    wallColliders: shell2638.wallColliders,
+    doors: shell2638.doors,
+    residents: int2638.residents,
+    tvScreens: int2638.tvScreens,
+    interiorLights: int2638.interiorLights,
+    christmasGroups: [shell2638.christmasGroup, int2638.christmasGroup, back2638.christmasGroup],
+  });
+
+  const upper2638 = makeWorldBox(9.07, 1.90, 6.70, blueGreySiding);
+  upper2638.position.set(0.0, 3.10 + 0.95, -2.0);
+  upper2638.castShadow = true;
+  upper2638.receiveShadow = true;
   const roof2638 = new THREE.Mesh(createPitchedRoofGeometry(9.07, 6.70, 2.35, false, 0.35), darkShingleMat);
   roof2638.position.set(0.0, 5.0, -2.0);
   roof2638.castShadow = true;
@@ -1321,7 +1513,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   gables2638.position.copy(roof2638.position);
   const chim2638 = makeWorldBox(0.75, 1.85, 0.75, darkTrimMat);
   chim2638.position.set(0.8, 6.65, -4.4);
-  g2638.add(main2638, roof2638, trim2638, gables2638, chim2638);
+  g2638.add(upper2638, roof2638, trim2638, gables2638, chim2638);
   registerHeroChimney(scene, g2638, 0.8, 7.65, -4.4);
 
   // South recessed wing + open carport/garage bay + sweeping sloped roof + shed dormer
@@ -1341,7 +1533,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   dormerRoof2638.position.set(1.25, 5.42, 3.15);
   g2638.add(southWall2638, garageBay2638, sweepSlope2638, dormerBody2638, dormerRoof2638);
 
-  // Corner boards & windows on 2638
+  // Corner boards & 2nd-storey windows on 2638 (1st-floor window is real see-through cutout!)
   for (const cz of [-5.28, 1.28]) {
     const cornerB = new THREE.Mesh(new THREE.BoxGeometry(0.16, 4.6, 0.18), blueGreyTrimMat);
     cornerB.position.set(4.52, 2.75, cz);
@@ -1349,16 +1541,14 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   }
   addWindow(g2638, 4.55, 3.85, -3.4, 1.35, 1.25, false);
   addWindow(g2638, 4.55, 3.85, -0.4, 1.45, 1.25, false);
-  addWindow(g2638, 4.55, 1.75, -2.0, 2.05, 1.35, false);
   addWindow(g2638, 2.52, 4.75, 3.15, 1.15, 0.82, false);
-  // Trash bins & curved front cedar hedge + red wheelbarrow
+  // Trash bins & curved front cedar hedge (leaving front entry walkway open) + red wheelbarrow
   for (const tz of [4.85, 5.5]) {
     const tbin = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.85, 0.55), darkTrimMat);
     tbin.position.set(2.9, 0.42, tz);
     g2638.add(tbin);
   }
-  addSculptedHedge(g2638, 5.8, 1.0, 2.6, 1.2, 1.65, 0.35);
-  addSculptedHedge(g2638, 6.4, -2.2, 4.8, 1.25, 1.72, -0.15);
+  addSculptedHedge(g2638, 6.8, -3.1, 4.2, 1.25, 1.72, -0.15);
   const wbTray2638 = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.36, 0.56), new THREE.MeshStandardMaterial({ color: 0xc42c24, roughness: 0.55 }));
   wbTray2638.position.set(8.6, 0.42, 6.4);
   const wbWheel2638 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.12), darkTrimMat);
@@ -1406,19 +1596,83 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   f2654B.position.set(-1.35, -0.45, 4.73);
   g2654.add(f2654A, f2654B);
 
-  // North projecting wing (x: -5.47..5.49, z: -6.56..2.90) w/ warm taupe vertical front wall
-  const main2654 = makeWorldBox(10.96, 3.65, 9.46, greyHorizSiding);
-  main2654.position.set(0.01, 0.6 + 1.825, -1.83);
-  main2654.castShadow = true;
-  main2654.receiveShadow = true;
-  const frontAccent2654 = makeWorldBox(0.16, 3.65, 9.48, warmTaupeVert);
-  frontAccent2654.position.set(5.43, 0.6 + 1.825, -1.83);
-  g2654.add(main2654, frontAccent2654);
-  for (let bz = -6.2; bz <= 2.5; bz += 0.62) {
-    const batten = new THREE.Mesh(new THREE.BoxGeometry(0.04, 3.6, 0.05), darkTrimMat);
-    batten.position.set(5.52, 2.42, bz);
-    g2654.add(batten);
-  }
+  // North projecting wing (x: -5.47..5.49, z: -6.56..2.90): HOLLOW enterable ground floor w/ see-through windows!
+  const groundH2654 = 2.75;
+  const [wCx2654, wCz2654] = localOffsetToWorld(rec2654.obbCx, rec2654.obbCz, rec2654.ang, 0.01, -1.83);
+  const shell2654 = createHollowShell({
+    d: 10.96,
+    w: 9.46,
+    floorY: 0.60,
+    groundH: groundH2654,
+    upperH: 0,
+    includeRoof: false,
+    includeFoundation: false,
+    includeFrontSteps: true,
+    frontDoorZ: 2.55,
+    frontDoorW: 1.48,
+    frontDoorH: 2.24,
+    backDoorZ: -0.6,
+    backDoorW: 1.85,
+    backDoorH: 2.20,
+    frontWindows: [
+      { z: -1.75, w: 2.35, yBottom: 1.25, h: 1.42 },
+      { z: 0.65, w: 1.75, yBottom: 1.25, h: 1.42 },
+    ],
+    exteriorMat: greyHorizSiding,
+    trimMat,
+    seed: 2654,
+    texLib,
+    worldTransform: { cx: wCx2654, cz: wCz2654, ang: rec2654.ang, elev: elev2654 },
+  });
+  shell2654.group.position.set(0.01, 0, -1.83);
+  g2654.add(shell2654.group);
+
+  const int2654 = populateHouseInterior(shell2654.group, {
+    w: 9.46,
+    d: 10.96,
+    floorY: 0.60,
+    groundH: groundH2654,
+    seed: 2654,
+    style: 'bungalow',
+    frontDoorZ: 2.55,
+    backDoorZ: -0.6,
+    texLib,
+  });
+  const back2654 = populateDetailedBackyard(shell2654.group, {
+    w: 9.46,
+    d: 10.96,
+    floorY: 0.60,
+    backDoorZ: -0.6,
+    seed: 2654,
+    texLib,
+  });
+  registerExternalEnterable({
+    id: 827707339,
+    label: '2654 Rue des Cormiers',
+    cx: wCx2654,
+    cz: wCz2654,
+    ang: rec2654.ang,
+    cosA: Math.cos(rec2654.ang),
+    sinA: Math.sin(rec2654.ang),
+    halfD: 10.96 * 0.5,
+    halfW: 9.46 * 0.5,
+    floorY: elev2654 + 0.60,
+    ceilingY: elev2654 + 0.60 + groundH2654,
+    wallColliders: shell2654.wallColliders,
+    doors: shell2654.doors,
+    residents: int2654.residents,
+    tvScreens: int2654.tvScreens,
+    interiorLights: int2654.interiorLights,
+    christmasGroups: [shell2654.christmasGroup, int2654.christmasGroup, back2654.christmasGroup],
+  });
+
+  // Upper frieze band (y=3.35..4.25) with warm taupe front accent beneath main roof
+  const upperBand2654 = makeWorldBox(10.96, 0.90, 9.46, greyHorizSiding);
+  upperBand2654.position.set(0.01, 3.35 + 0.45, -1.83);
+  upperBand2654.castShadow = true;
+  const frontAccent2654 = makeWorldBox(0.16, 0.90, 9.48, warmTaupeVert);
+  frontAccent2654.position.set(5.43, 3.35 + 0.45, -1.83);
+  g2654.add(upperBand2654, frontAccent2654);
   const roof2654 = new THREE.Mesh(createPitchedRoofGeometry(10.96, 9.46, 2.15, false, 0.35), shingleMat);
   roof2654.position.set(0.01, 4.25, -1.83);
   roof2654.castShadow = true;
@@ -1427,8 +1681,6 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   const gables2654 = new THREE.Mesh(createGableEndsGeometry(10.96, 9.46, 2.15), greyHorizSiding);
   gables2654.position.copy(roof2654.position);
   g2654.add(roof2654, trim2654, gables2654);
-  addWindow(g2654, 5.52, 2.35, -3.55, 1.55, 1.35, false);
-  addWindow(g2654, 5.52, 2.35, 0.45, 1.85, 1.35, false);
 
   // South recessed entry wing (x: -5.45..2.73, z: 2.90..6.55) + steps
   const south2654 = makeWorldBox(8.18, 3.65, 3.65, greyHorizSiding);
@@ -1544,20 +1796,81 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   addWindow(g2643, 5.49, 4.35, 2.85, 0.72, 1.32, false);
   addWindow(g2643, 5.49, 4.35, 3.95, 0.72, 1.32, false);
 
-  // Center Projecting Cream-Brick Cathedral-Gable Entry Tower (x: -5.46..5.47, z: -1.11..1.55)
-  const towerUpper2643 = makeWorldBox(10.93, 3.05, 2.66, creamBrickMat, 1.8);
-  towerUpper2643.position.set(0.0, 2.75 + 1.525, 0.22);
+  // Center Entry Tower + South Split-Level Living Wing: unified HOLLOW enterable ground floor (x:-5.45..4.25, z:-5.35..1.55)
+  const groundH2643 = 2.75;
+  const [wCx2643, wCz2643] = localOffsetToWorld(rec2643.obbCx, rec2643.obbCz, rec2643.ang, -0.6, -1.90);
+  const shell2643 = createHollowShell({
+    d: 9.7,
+    w: 6.90,
+    floorY: 0.42,
+    groundH: groundH2643,
+    upperH: 0,
+    includeRoof: false,
+    includeFoundation: false,
+    includeFrontSteps: false,
+    frontDoorZ: 2.05, // aligns with z = 0.15 on towerStoop2643
+    frontDoorW: 1.44,
+    frontDoorH: 2.24,
+    backDoorZ: -0.8,
+    backDoorW: 1.85,
+    backDoorH: 2.20,
+    frontWindows: [{ z: -0.95, w: 2.85, yBottom: 1.12, h: 1.48 }], // huge living room picture window at z = -2.85
+    exteriorMat: whiteSiding,
+    trimMat,
+    seed: 2643,
+    texLib,
+    worldTransform: { cx: wCx2643, cz: wCz2643, ang: rec2643.ang, elev: elev2643 },
+  });
+  shell2643.group.position.set(-0.6, 0, -1.90);
+  g2643.add(shell2643.group);
+
+  const int2643 = populateHouseInterior(shell2643.group, {
+    w: 6.90,
+    d: 9.7,
+    floorY: 0.42,
+    groundH: groundH2643,
+    seed: 2643,
+    style: 'splitlevel',
+    frontDoorZ: 2.05,
+    backDoorZ: -0.8,
+    texLib,
+  });
+  const back2643 = populateDetailedBackyard(shell2643.group, {
+    w: 6.90,
+    d: 9.7,
+    floorY: 0.42,
+    backDoorZ: -0.8,
+    seed: 2643,
+    texLib,
+  });
+  registerExternalEnterable({
+    id: 827707342,
+    label: '2643 Rue des Cormiers',
+    cx: wCx2643,
+    cz: wCz2643,
+    ang: rec2643.ang,
+    cosA: Math.cos(rec2643.ang),
+    sinA: Math.sin(rec2643.ang),
+    halfD: 9.7 * 0.5,
+    halfW: 6.90 * 0.5,
+    floorY: elev2643 + 0.42,
+    ceilingY: elev2643 + 0.42 + groundH2643,
+    wallColliders: shell2643.wallColliders,
+    doors: shell2643.doors,
+    residents: int2643.residents,
+    tvScreens: int2643.tvScreens,
+    interiorLights: int2643.interiorLights,
+    christmasGroups: [shell2643.christmasGroup, int2643.christmasGroup, back2643.christmasGroup],
+  });
+
+  // Upper Cathedral-Gable Entry Tower above hollow ground floor (y=3.17..5.80)
+  const towerUpper2643 = makeWorldBox(10.93, 2.63, 2.66, creamBrickMat, 1.8);
+  towerUpper2643.position.set(0.0, 3.17 + 1.315, 0.22);
   towerUpper2643.castShadow = true;
-  const towerRear2643 = makeWorldBox(9.8, 4.35, 2.66, creamBrickMat, 1.8);
-  towerRear2643.position.set(-0.56, 0.675, 0.22);
-  const towerPier2643 = makeWorldBox(0.45, 2.75, 0.45, creamBrickMat, 1.8);
-  towerPier2643.position.set(5.22, 1.38, 1.32);
-  const towerStoop2643 = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.32, 2.65), concreteMat);
-  towerStoop2643.position.set(4.95, 0.16, 0.22);
-  const towerDoor2643 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.12, 1.05), trimMat);
-  towerDoor2643.position.set(4.36, 1.38, 0.15);
-  const towerDoorGlass = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.65, 0.75), windowMat);
-  towerDoorGlass.position.set(4.37, 1.42, 0.15);
+  const towerPier2643 = makeWorldBox(0.45, 3.17, 0.45, creamBrickMat, 1.8);
+  towerPier2643.position.set(5.22, 1.585, 1.32);
+  const towerStoop2643 = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.36, 2.65), concreteMat);
+  towerStoop2643.position.set(4.95, 0.18, 0.22);
   const towerGableRoof = new THREE.Mesh(createPitchedRoofGeometry(2.66, 5.8, 1.55, false, 0.28), darkShingleMat);
   towerGableRoof.rotation.y = Math.PI / 2;
   towerGableRoof.position.set(2.57, 5.8, 0.22);
@@ -1569,19 +1882,19 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   towerGableFace.rotation.y = Math.PI / 2;
   towerGableFace.position.copy(towerGableRoof.position);
   g2643.add(
-    towerUpper2643, towerRear2643, towerPier2643, towerStoop2643,
-    towerDoor2643, towerDoorGlass, towerGableRoof, towerGableTrim, towerGableFace
+    towerUpper2643, towerPier2643, towerStoop2643,
+    towerGableRoof, towerGableTrim, towerGableFace
   );
   // Twin tall cathedral windows in front peak
   addWindow(g2643, 5.49, 4.45, -0.32, 0.78, 1.95, false);
   addWindow(g2643, 5.49, 4.45, 0.56, 0.78, 1.95, false);
 
-  // Right/South Recessed Split-Level Living Wing (x: -5.45..4.25, z: -5.35..-1.11)
-  const wingFound2643 = makeWorldBox(9.7, 1.9, 4.24, foundMat);
-  wingFound2643.position.set(-0.6, 0.15, -3.23);
-  const wingWall2643 = makeWorldBox(9.7, 2.75, 4.24, whiteSiding);
-  wingWall2643.position.set(-0.6, 1.1 + 1.375, -3.23);
-  wingWall2643.castShadow = true;
+  // Right/South Recessed Split-Level Living Wing foundation, frieze band, pilaster, chimney & roof
+  const wingFound2643 = makeWorldBox(9.7, 1.9, 6.90, foundMat);
+  wingFound2643.position.set(-0.6, -0.53, -1.90);
+  const wingFrieze2643 = makeWorldBox(9.7, 0.68, 4.24, whiteSiding);
+  wingFrieze2643.position.set(-0.6, 3.17 + 0.34, -3.23);
+  wingFrieze2643.castShadow = true;
   const wingPilaster2643 = makeWorldBox(0.6, 3.85, 0.65, creamBrickMat, 1.8);
   wingPilaster2643.position.set(4.02, 1.92, -5.08);
   const chim2643 = makeWorldBox(0.95, 6.7, 0.75, creamBrickMat, 1.8);
@@ -1593,12 +1906,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   wingRoof2643.castShadow = true;
   const wingTrim2643 = new THREE.Mesh(createRoofTrimGeometry(9.7, 4.24, 1.85, false, 0.32), trimMat);
   wingTrim2643.position.copy(wingRoof2643.position);
-  g2643.add(wingFound2643, wingWall2643, wingPilaster2643, chim2643, wingRoof2643, wingTrim2643);
-  // Picture window + 3 basement windows
-  addWindow(g2643, 4.26, 2.55, -2.85, 2.85, 1.48, false);
-  for (const bwu of [-4.05, -2.9, -1.75]) {
-    addWindow(g2643, 4.26, 0.72, bwu, 0.78, 0.45, false);
-  }
+  g2643.add(wingFound2643, wingFrieze2643, wingPilaster2643, chim2643, wingRoof2643, wingTrim2643);
 
   // 2643 Landscaping: rounded north driveway hedge, trash bin, long low south side hedge & ~11m Sugar Maple
   addSculptedHedge(g2643, 7.2, 6.5, 4.6, 1.4, 1.85, 0.08);
@@ -1635,7 +1943,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   addChristmasStringLine(xmas2643, 5.65, 7.25, 0.22, 5.65, 5.8, 1.55, 0.48);
   addChristmasStringLine(xmas2643, 4.48, 3.85, -5.3, 4.48, 3.85, -1.1, 0.52);
   addChristmasGarland(xmas2643, 5.45, 2.75, -1.0, 5.45, 2.75, 1.45);
-  addChristmasWreath(xmas2643, 4.44, 1.65, 0.15, Math.PI / 2, texLib);
+  addChristmasWreath(xmas2643, 4.44, 2.88, 0.15, Math.PI / 2, texLib);
   addVoxelSnowman(xmas2643, 7.2, 0, -2.8, Math.PI / 2, 1.05);
   addCandyCane(xmas2643, 5.85, 0, -0.75, Math.PI / 2, 0.95);
   addCandyCane(xmas2643, 5.85, 0, 1.2, Math.PI / 2, 0.95);
@@ -1715,10 +2023,89 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   f387B.position.set(1.45, -0.5, -5.75);
   g387.add(f387A, f387B);
 
-  const brickLowerA = makeWorldBox(11.6, 4.9, 11.5, redBrickMat, 1.8);
-  brickLowerA.position.set(0.0, 0.45 + 2.45, 1.95);
-  brickLowerA.castShadow = true;
-  brickLowerA.receiveShadow = true;
+  // Hollow enterable ground-floor quadruplex unit (y=0.45..3.20) + 2nd-floor brick band (y=3.20..5.35)
+  const groundH387 = 2.75;
+  const [wCx387, wCz387] = localOffsetToWorld(rec387.obbCx, rec387.obbCz, rec387.ang, 0.0, 1.95);
+  const shell387 = createHollowShell({
+    d: 11.6,
+    w: 11.5,
+    floorY: 0.45,
+    groundH: groundH387,
+    upperH: 0,
+    includeRoof: false,
+    includeFoundation: false,
+    includeFrontSteps: true,
+    frontDoorZ: 1.5,
+    frontDoorW: 1.48,
+    frontDoorH: 2.24,
+    backDoorZ: 2.85,
+    backDoorW: 1.85,
+    backDoorH: 2.20,
+    frontWindows: [
+      { z: -2.8, w: 2.2, yBottom: 1.15, h: 1.42 },
+      { z: 3.8, w: 2.0, yBottom: 1.15, h: 1.42 },
+    ],
+    sideWindows: {
+      posZ: [
+        { x: -3.2, w: 1.8, yBottom: 1.15, h: 1.42 },
+        { x: 0.2, w: 2.1, yBottom: 1.15, h: 1.42 },
+        { x: 3.4, w: 1.8, yBottom: 1.15, h: 1.42 },
+      ],
+      negZ: [{ x: -1.5, w: 1.8, yBottom: 1.15, h: 1.42 }],
+    },
+    exteriorMat: redBrickMat,
+    trimMat: forestTrimMat,
+    seed: 387,
+    texLib,
+    worldTransform: { cx: wCx387, cz: wCz387, ang: rec387.ang, elev: elev387 },
+  });
+  shell387.group.position.set(0.0, 0, 1.95);
+  g387.add(shell387.group);
+
+  const int387 = populateHouseInterior(shell387.group, {
+    w: 11.5,
+    d: 11.6,
+    floorY: 0.45,
+    groundH: groundH387,
+    seed: 387,
+    style: 'quadruplex',
+    frontDoorZ: 1.5,
+    backDoorZ: 2.85,
+    texLib,
+  });
+  const back387 = populateDetailedBackyard(shell387.group, {
+    w: 11.5,
+    d: 11.6,
+    floorY: 0.45,
+    backDoorZ: 2.85,
+    seed: 387,
+    texLib,
+    skipPool: true,
+  });
+  registerExternalEnterable({
+    id: 827707441,
+    label: '387 Rue des Peupliers',
+    cx: wCx387,
+    cz: wCz387,
+    ang: rec387.ang,
+    cosA: Math.cos(rec387.ang),
+    sinA: Math.sin(rec387.ang),
+    halfD: 11.6 * 0.5,
+    halfW: 11.5 * 0.5,
+    floorY: elev387 + 0.45,
+    ceilingY: elev387 + 0.45 + groundH387,
+    wallColliders: shell387.wallColliders,
+    doors: shell387.doors,
+    residents: int387.residents,
+    tvScreens: int387.tvScreens,
+    interiorLights: int387.interiorLights,
+    christmasGroups: [shell387.christmasGroup, int387.christmasGroup, back387.christmasGroup],
+  });
+
+  const brickUpperA = makeWorldBox(11.6, 2.15, 11.5, redBrickMat, 1.8);
+  brickUpperA.position.set(0.0, 3.20 + 1.075, 1.95);
+  brickUpperA.castShadow = true;
+  brickUpperA.receiveShadow = true;
   const brickLowerB = makeWorldBox(8.7, 4.9, 3.9, redBrickMat, 1.8);
   brickLowerB.position.set(1.45, 0.45 + 2.45, -5.75);
   brickLowerB.castShadow = true;
@@ -1729,7 +2116,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   const vinylTopB = makeWorldBox(8.7, 2.5, 3.9, whiteSiding);
   vinylTopB.position.set(1.45, 5.35 + 1.25, -5.75);
   vinylTopB.castShadow = true;
-  g387.add(brickLowerA, brickLowerB, vinylTopA, vinylTopB);
+  g387.add(brickUpperA, brickLowerB, vinylTopA, vinylTopB);
 
   // Moss-grey hip roofs + white eave fascia + South & East white front pediment gables
   const hipRoofA = new THREE.Mesh(createPitchedRoofGeometry(11.6, 11.5, 2.45, true, 0.42), mossShingleMat);
@@ -1762,9 +2149,6 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   for (const wx of [-3.4, 0.0, 3.4]) {
     addQuadWin(wx, 6.6, 7.72, 1.45, 1.3, -Math.PI / 2);
     addQuadWin(wx, 4.05, 7.72, 1.35, 1.3, -Math.PI / 2);
-  }
-  for (const bx of [0.2, 3.4]) {
-    addQuadWin(bx, 1.15, 7.72, 1.3, 0.72, -Math.PI / 2);
   }
   for (const ez of [-4.6, -1.2, 2.4, 5.2]) {
     addQuadWin(5.82, 6.6, ez, 1.35, 1.3, 0);
@@ -1907,7 +2291,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   // Red-bow pine garlands & front door wreath
   addChristmasGarland(xmas2646, 5.65, 2.72, 0.35, 5.65, 2.72, 2.15);
   addChristmasGarland(xmas2646, 4.22, 2.66, 3.15, 4.22, 2.66, 6.75);
-  addChristmasWreath(xmas2646, 4.38, 1.75, 1.25, Math.PI / 2, texLib);
+  addChristmasWreath(xmas2646, 5.72, 3.08, 1.25, Math.PI / 2, texLib);
   // Decorated tree w/ wrapped presents, cute voxel snowman, giant candy canes, glowing reindeer & lawn star
   addDecoratedChristmasTree(xmas2646, 8.8, 0.0, -1.6, 0.98, true);
   addVoxelSnowman(xmas2646, 7.6, 0.0, -3.5, Math.PI / 2, 1.05);

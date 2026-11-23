@@ -23,6 +23,7 @@ import {
   setNightMode as worldSetNightMode,
   updateChimneySmoke,
 } from './worldBuilders.js';
+import { buildEnterable100mZone } from './interiors.js';
 import { createSimulation, makePedestrianMesh } from './simulation.js';
 
 const DATA = window.NEIGHBOURHOOD_DATA;
@@ -203,9 +204,31 @@ const galvinMesh = buildDepanneurGalvin(scene, texLib, bGalvin, DATA.elevation);
 if (galvinMesh) pickableBuildingMeshes.push(galvinMesh);
 
 const { lampBulbMesh, obstacles } = buildSuburbanDetailsAndTrees(scene, DATA, texLib);
+const interiors = buildEnterable100mZone(scene, DATA, texLib, DATA.elevation);
+if (Array.isArray(interiors.pickableMeshes)) {
+  pickableBuildingMeshes.push(...interiors.pickableMeshes);
+}
+obstacles.enterableIds = interiors.enterableIds;
+obstacles.interiorWalls = interiors.wallColliders;
 const simulation = createSimulation(scene, DATA, obstacles);
 const collider = simulation.collider;
 const elevAt = (x, z) => sampleElevation(x, z, DATA.elevation);
+
+function findIndoorBuilding(x, z, margin = 0.4) {
+  const list = interiors.enterableBuildings;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    const dx = x - b.cx;
+    const dz = z - b.cz;
+    if (dx * dx + dz * dz > 400) continue;
+    const u = dx * b.cosA + dz * b.sinA;
+    const v = -dx * b.sinA + dz * b.cosA;
+    if (Math.abs(u) <= b.halfD + margin && Math.abs(v) <= b.halfW + margin) {
+      return b;
+    }
+  }
+  return null;
+}
 
 function resolvePlayerCollisions(x, z, radius = 0.42) {
   let px = x;
@@ -338,12 +361,35 @@ document.querySelectorAll('.lm-btn').forEach((btn) => {
   });
 });
 
+const controlsHintEl = document.getElementById('controls-hint');
+const DEFAULT_MODE_HINTS = {
+  orbit: 'Left-drag: Orbit • Right-drag: Pan • Scroll: Zoom • Click building: Inspect',
+  char: 'Little Character • W/S: Walk • A/D: Turn • Q/E: Strafe • Shift: Sprint • Space: Jump • Stop & Drag: Look',
+  walk: 'Eye-level 1.7m • WASD / Arrows: Walk • Drag mouse: Look around • Shift: Jog',
+  fly: 'Drone Fly • WASD: Move • Q/E: Up/Down • Drag mouse: Look • Shift: Boost',
+};
+let activeCamDist = 6.2;
+let currentIndoorLabel = null;
+
+function updateIndoorHint(indoorBldg) {
+  const nextLabel = indoorBldg ? indoorBldg.label : null;
+  if (nextLabel === currentIndoorLabel) return;
+  currentIndoorLabel = nextLabel;
+  if (!controlsHintEl) return;
+  if (nextLabel) {
+    controlsHintEl.textContent = `Inside ${nextLabel} • WASD walk, Drag to look around & out windows`;
+  } else {
+    controlsHintEl.textContent = DEFAULT_MODE_HINTS[camMode] || DEFAULT_MODE_HINTS.orbit;
+  }
+}
+
 function setCameraMode(mode) {
   camMode = mode;
   glideAnim = null;
+  currentIndoorLabel = null;
   playerChar.root.visible = mode === 'char';
   document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
-  const hint = document.getElementById('controls-hint');
+  const hint = controlsHintEl;
 
   if (mode === 'char') {
     orbit.enabled = false;
@@ -353,11 +399,15 @@ function setCameraMode(mode) {
       charState.x = tx;
       charState.z = tz;
     }
-    charState.y = elevAt(charState.x, charState.z);
+    const startIndoor = findIndoorBuilding(charState.x, charState.z, 0.4);
+    const rawGround = elevAt(charState.x, charState.z);
+    charState.y = startIndoor ? Math.max(rawGround, startIndoor.floorY) : rawGround;
     charState.velY = 0;
+    activeCamDist = startIndoor ? 2.15 : 6.2;
     walkYaw = Math.atan2(Math.cos(-charState.facing), Math.sin(-charState.facing));
-    walkPitch = 0.32;
-    hint.textContent = 'Little Character • W/S: Walk • A/D: Turn • Q/E: Strafe • Shift: Sprint • Space: Jump • Stop & Drag: Look';
+    walkPitch = startIndoor ? 0.14 : 0.32;
+    hint.textContent = DEFAULT_MODE_HINTS.char;
+    if (startIndoor) updateIndoorHint(startIndoor);
   } else if (mode === 'orbit') {
     orbit.enabled = true;
     const camGround = elevAt(camera.position.x, camera.position.z);
@@ -370,15 +420,20 @@ function setCameraMode(mode) {
     const tgtGround = elevAt(orbit.target.x, orbit.target.z);
     orbit.target.y = Math.max(tgtGround, Math.min(tgtGround + 12, orbit.target.y));
     orbit.update();
-    hint.textContent = 'Left-drag: Orbit • Right-drag: Pan • Scroll: Zoom • Click building: Inspect';
+    hint.textContent = DEFAULT_MODE_HINTS.orbit;
   } else if (mode === 'walk') {
     orbit.enabled = false;
-    camera.position.y = elevAt(camera.position.x, camera.position.z) + 1.72;
+    const walkIndoor = findIndoorBuilding(camera.position.x, camera.position.z, 0.25);
+    const baseY = elevAt(camera.position.x, camera.position.z);
+    camera.position.y = walkIndoor
+      ? Math.min(walkIndoor.ceilingY - 0.38, Math.max(baseY, walkIndoor.floorY) + 1.65)
+      : baseY + 1.72;
     const forward = new THREE.Vector3();
     camera.getWorldDirection(forward);
     walkYaw = Math.atan2(forward.x, forward.z);
     walkPitch = -0.02;
-    hint.textContent = 'Eye-level 1.7m • WASD / Arrows: Walk • Drag mouse: Look around • Shift: Jog';
+    hint.textContent = DEFAULT_MODE_HINTS.walk;
+    if (walkIndoor) updateIndoorHint(walkIndoor);
   } else {
     orbit.enabled = false;
     const camGround = elevAt(camera.position.x, camera.position.z);
@@ -387,7 +442,7 @@ function setCameraMode(mode) {
     camera.getWorldDirection(forward);
     walkYaw = Math.atan2(forward.x, forward.z);
     walkPitch = Math.asin(Math.max(-0.9, Math.min(0.9, forward.y)));
-    hint.textContent = 'Drone Fly • WASD: Move • Q/E: Up/Down • Drag mouse: Look • Shift: Boost';
+    hint.textContent = DEFAULT_MODE_HINTS.fly;
   }
 }
 
@@ -547,6 +602,7 @@ function updateDaylight(hour) {
 
   worldSetNightMode(isNight);
   heroSetNightMode(isNight);
+  interiors.setNightMode(isNight);
 
   if (lampBulbMesh) {
     lampBulbMesh.material.emissiveIntensity = isNight
@@ -634,6 +690,7 @@ function applyChristmasMode(active) {
   if (christmasPill) christmasPill.textContent = next ? 'ON' : 'OFF';
   worldSetChristmasMode(next);
   heroSetChristmasMode(next);
+  interiors.setChristmasMode(next);
   updateDaylight(parseFloat(timeSlider.value));
 }
 
@@ -648,6 +705,7 @@ function applyWinterMode(active) {
   }
   worldSetWinterMode(isWinter);
   heroSetWinterMode(isWinter);
+  interiors.setWinterMode(isWinter);
   simulation.setWinterMode(isWinter);
   playerChar.setWinterMode?.(isWinter);
   snowMesh.visible = isWinter;
@@ -1072,26 +1130,37 @@ function animate(now) {
     const charCol = resolvePlayerCollisions(charState.x, charState.z, 0.42);
     charState.x = charCol.x;
     charState.z = charCol.z;
+
+    const indoorBldg = findIndoorBuilding(charState.x, charState.z, 0.4);
+    const strictlyInside = indoorBldg ? findIndoorBuilding(charState.x, charState.z, -0.04) : null;
+    updateIndoorHint(indoorBldg);
+
     if (isMoving) {
       charState.phase += dt * spd * 2.6;
       // Always shift camera smoothly behind the character whenever moving
       const targetCamYaw = Math.atan2(dirX, dirZ);
       const deltaYaw = Math.atan2(Math.sin(targetCamYaw - walkYaw), Math.cos(targetCamYaw - walkYaw));
       walkYaw += deltaYaw * Math.min(1, dt * 12.0);
-      walkPitch += (0.32 - walkPitch) * Math.min(1, dt * 7.5);
+      const defaultPitch = indoorBldg ? 0.14 : 0.32;
+      walkPitch += (defaultPitch - walkPitch) * Math.min(1, dt * 7.5);
     } else {
       charState.phase = 0;
     }
 
-    const groundY = elevAt(charState.x, charState.z);
+    const rawGroundY = elevAt(charState.x, charState.z);
+    const groundY = indoorBldg ? Math.max(rawGroundY, indoorBldg.floorY) : rawGroundY;
     if (keysDown.has('Space') && charState.y <= groundY + 0.05) {
-      charState.velY = 6.2;
+      charState.velY = indoorBldg ? 4.2 : 6.2;
     }
     charState.velY -= 16.5 * dt;
     charState.y += charState.velY * dt;
     if (charState.y <= groundY) {
       charState.y = groundY;
       charState.velY = 0;
+    }
+    if (indoorBldg && charState.y > indoorBldg.ceilingY - 1.55) {
+      charState.y = indoorBldg.ceilingY - 1.55;
+      if (charState.velY > 0) charState.velY = 0;
     }
 
     playerChar.root.position.set(charState.x, charState.y, charState.z);
@@ -1102,19 +1171,40 @@ function animate(now) {
     playerChar.armL.rotation.z = -swing * 0.8;
     playerChar.armR.rotation.z = swing * 0.8;
 
-    const camDist = 6.2;
-    const pitchClamped = Math.max(-0.95, Math.min(1.25, walkPitch));
-    const horizDist = Math.cos(pitchClamped) * camDist;
-    const camX = charState.x - Math.sin(walkYaw) * horizDist;
-    const camZ = charState.z - Math.cos(walkYaw) * horizDist;
+    const targetCamDist = indoorBldg ? 2.15 : 6.2;
+    activeCamDist += (targetCamDist - activeCamDist) * Math.min(1, dt * 8.5);
+    const pitchClamped = indoorBldg
+      ? Math.max(-0.48, Math.min(0.45, walkPitch))
+      : Math.max(-0.95, Math.min(1.25, walkPitch));
+    const horizDist = Math.cos(pitchClamped) * activeCamDist;
+    let camX = charState.x - Math.sin(walkYaw) * horizDist;
+    let camZ = charState.z - Math.cos(walkYaw) * horizDist;
     const camGroundY = elevAt(camX, camZ);
-    const rawCamY = charState.y + 1.45 + Math.sin(pitchClamped) * camDist;
-    const camY = Math.max(camGroundY + 0.55, rawCamY);
+    const eyeOff = indoorBldg ? 1.32 : 1.45;
+    const rawCamY = charState.y + eyeOff + Math.sin(pitchClamped) * activeCamDist;
+    let camY = Math.max(camGroundY + 0.55, rawCamY);
+
+    if (strictlyInside) {
+      const cdx = camX - strictlyInside.cx;
+      const cdz = camZ - strictlyInside.cz;
+      let cu = cdx * strictlyInside.cosA + cdz * strictlyInside.sinA;
+      let cv = -cdx * strictlyInside.sinA + cdz * strictlyInside.cosA;
+      const maxU = Math.max(0.35, strictlyInside.halfD - 0.32);
+      const maxV = Math.max(0.35, strictlyInside.halfW - 0.32);
+      cu = Math.max(-maxU, Math.min(maxU, cu));
+      cv = Math.max(-maxV, Math.min(maxV, cv));
+      camX = strictlyInside.cx + strictlyInside.cosA * cu - strictlyInside.sinA * cv;
+      camZ = strictlyInside.cz + strictlyInside.sinA * cu + strictlyInside.cosA * cv;
+      camY = Math.max(strictlyInside.floorY + 1.15, Math.min(strictlyInside.ceilingY - 0.38, camY));
+    } else if (indoorBldg) {
+      camY = Math.min(indoorBldg.ceilingY - 0.38, camY);
+    }
     camera.position.set(camX, camY, camZ);
 
-    // When looking up (pitch < 0), tilt look target up into the sky & clouds
-    const skyLift = pitchClamped < 0 ? -Math.sin(pitchClamped) * 14.0 : 0;
-    const lookAhead = pitchClamped < 0 ? 6.0 : 0;
+    // When looking up (pitch < 0) outdoors, tilt look target up into the sky & clouds;
+    // indoors, look smoothly ahead so you can inspect rooms & look out through windows
+    const skyLift = !indoorBldg && pitchClamped < 0 ? -Math.sin(pitchClamped) * 14.0 : (indoorBldg ? -Math.sin(pitchClamped) * 2.2 : 0);
+    const lookAhead = indoorBldg ? 2.4 : (pitchClamped < 0 ? 6.0 : 0);
     camera.lookAt(
       charState.x + Math.sin(walkYaw) * lookAhead,
       charState.y + 1.25 + skyLift,
@@ -1150,7 +1240,12 @@ function animate(now) {
       const walkCol = resolvePlayerCollisions(camera.position.x, camera.position.z, 0.42);
       camera.position.x = walkCol.x;
       camera.position.z = walkCol.z;
-      camera.position.y = elevAt(camera.position.x, camera.position.z) + 1.72;
+      const walkIndoor = findIndoorBuilding(camera.position.x, camera.position.z, 0.25);
+      const baseY = elevAt(camera.position.x, camera.position.z);
+      camera.position.y = walkIndoor
+        ? Math.min(walkIndoor.ceilingY - 0.38, Math.max(baseY, walkIndoor.floorY) + 1.65)
+        : baseY + 1.72;
+      updateIndoorHint(walkIndoor);
     }
     _tmpLookTarget.copy(camera.position).add(_tmpLookDir);
     camera.lookAt(_tmpLookTarget);
@@ -1216,6 +1311,7 @@ function animate(now) {
     playerPos = _tmpPlayerPos;
   }
   simulation.update(dt, isWinter ? Math.min(1, nightFactor + 0.25) : nightFactor, chkTraffic.checked, playerPos);
+  interiors.updateInteriors(dt, elapsedSec, playerPos, isNightMode);
   updateWorldLabels();
   if (animFrameIdx === 1 || animFrameIdx % 3 === 0) {
     updateMinimap();
