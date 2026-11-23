@@ -230,10 +230,62 @@ function findIndoorBuilding(x, z, margin = 0.4) {
   return null;
 }
 
-function resolvePlayerCollisions(x, z, radius = 0.42) {
+function getIndoorFloorInfo(bldg, worldX, worldZ, currentY) {
+  if (!bldg) return null;
+  if (bldg.hasUpperFloor && bldg.stair) {
+    const dx = worldX - bldg.cx;
+    const dz = worldZ - bldg.cz;
+    const u = dx * bldg.cosA + dz * bldg.sinA;
+    const v = -dx * bldg.sinA + dz * bldg.cosA;
+    const s = bldg.stair;
+    const coord = s.axis === 'z' ? v : u;
+    const cross = s.axis === 'z' ? u : v;
+    const axisMin = Math.min(s.start, s.end) - 0.35;
+    const axisMax = Math.max(s.start, s.end) + 0.35;
+    if (
+      coord >= axisMin &&
+      coord <= axisMax &&
+      cross >= s.crossMin - 0.15 &&
+      cross <= s.crossMax + 0.15
+    ) {
+      const denom = s.end - s.start || 1;
+      const t = Math.max(0, Math.min(1, (coord - s.start) / denom));
+      const rampY = s.y0 + t * (s.y1 - s.y0);
+      return {
+        floorY: rampY,
+        ceilingY: bldg.upperCeilingY,
+        floorTag: t > 0.65 ? '2nd Floor' : t > 0.15 ? 'Stairs' : '1st Floor',
+        onStairs: true,
+      };
+    }
+    const midY = (bldg.floorY + bldg.upperFloorY) * 0.5;
+    if (currentY != null && currentY >= midY) {
+      return {
+        floorY: bldg.upperFloorY,
+        ceilingY: bldg.upperCeilingY,
+        floorTag: '2nd Floor',
+        onStairs: false,
+      };
+    }
+    return {
+      floorY: bldg.floorY,
+      ceilingY: bldg.ceilingY,
+      floorTag: '1st Floor',
+      onStairs: false,
+    };
+  }
+  return {
+    floorY: bldg.floorY,
+    ceilingY: bldg.ceilingY,
+    floorTag: '',
+    onStairs: false,
+  };
+}
+
+function resolvePlayerCollisions(x, z, radius = 0.42, y = null) {
   let px = x;
   let pz = z;
-  const staticRes = collider.resolveCircle(px, pz, radius);
+  const staticRes = collider.resolveCircle(px, pz, radius, y);
   px = staticRes.x;
   pz = staticRes.z;
 
@@ -371,8 +423,10 @@ const DEFAULT_MODE_HINTS = {
 let activeCamDist = 6.2;
 let currentIndoorLabel = null;
 
-function updateIndoorHint(indoorBldg) {
-  const nextLabel = indoorBldg ? indoorBldg.label : null;
+function updateIndoorHint(indoorBldg, floorTag = '') {
+  const nextLabel = indoorBldg
+    ? (floorTag ? `${indoorBldg.label} (${floorTag})` : indoorBldg.label)
+    : null;
   if (nextLabel === currentIndoorLabel) return;
   currentIndoorLabel = nextLabel;
   if (!controlsHintEl) return;
@@ -1127,13 +1181,14 @@ function animate(now) {
       charState.x += (dirX * nf + rightX * ns) * spd * dt;
       charState.z += (dirZ * nf + rightZ * ns) * spd * dt;
     }
-    const charCol = resolvePlayerCollisions(charState.x, charState.z, 0.42);
+    const charCol = resolvePlayerCollisions(charState.x, charState.z, 0.42, charState.y);
     charState.x = charCol.x;
     charState.z = charCol.z;
 
     const indoorBldg = findIndoorBuilding(charState.x, charState.z, 0.4);
     const strictlyInside = indoorBldg ? findIndoorBuilding(charState.x, charState.z, -0.04) : null;
-    updateIndoorHint(indoorBldg);
+    const floorInfo = indoorBldg ? getIndoorFloorInfo(indoorBldg, charState.x, charState.z, charState.y) : null;
+    updateIndoorHint(indoorBldg, floorInfo ? floorInfo.floorTag : '');
 
     if (isMoving) {
       charState.phase += dt * spd * 2.6;
@@ -1148,18 +1203,25 @@ function animate(now) {
     }
 
     const rawGroundY = elevAt(charState.x, charState.z);
-    const groundY = indoorBldg ? Math.max(rawGroundY, indoorBldg.floorY) : rawGroundY;
-    if (keysDown.has('Space') && charState.y <= groundY + 0.05) {
+    const groundY = floorInfo ? Math.max(rawGroundY, floorInfo.floorY) : rawGroundY;
+    const activeCeilY = floorInfo ? floorInfo.ceilingY : (indoorBldg ? indoorBldg.ceilingY : null);
+    if (keysDown.has('Space') && charState.y <= groundY + 0.08) {
       charState.velY = indoorBldg ? 4.2 : 6.2;
     }
-    charState.velY -= 16.5 * dt;
-    charState.y += charState.velY * dt;
-    if (charState.y <= groundY) {
-      charState.y = groundY;
+    if (floorInfo?.onStairs && charState.velY <= 0 && Math.abs(charState.y - groundY) < 0.85) {
+      charState.y += (groundY - charState.y) * Math.min(1, dt * 18);
+      if (charState.y < groundY) charState.y = groundY;
       charState.velY = 0;
+    } else {
+      charState.velY -= 16.5 * dt;
+      charState.y += charState.velY * dt;
+      if (charState.y <= groundY) {
+        charState.y = groundY;
+        charState.velY = 0;
+      }
     }
-    if (indoorBldg && charState.y > indoorBldg.ceilingY - 1.55) {
-      charState.y = indoorBldg.ceilingY - 1.55;
+    if (activeCeilY != null && charState.y > activeCeilY - 1.55) {
+      charState.y = activeCeilY - 1.55;
       if (charState.velY > 0) charState.velY = 0;
     }
 
@@ -1184,7 +1246,7 @@ function animate(now) {
     const rawCamY = charState.y + eyeOff + Math.sin(pitchClamped) * activeCamDist;
     let camY = Math.max(camGroundY + 0.55, rawCamY);
 
-    if (strictlyInside) {
+    if (strictlyInside && floorInfo) {
       const cdx = camX - strictlyInside.cx;
       const cdz = camZ - strictlyInside.cz;
       let cu = cdx * strictlyInside.cosA + cdz * strictlyInside.sinA;
@@ -1195,9 +1257,9 @@ function animate(now) {
       cv = Math.max(-maxV, Math.min(maxV, cv));
       camX = strictlyInside.cx + strictlyInside.cosA * cu - strictlyInside.sinA * cv;
       camZ = strictlyInside.cz + strictlyInside.sinA * cu + strictlyInside.cosA * cv;
-      camY = Math.max(strictlyInside.floorY + 1.15, Math.min(strictlyInside.ceilingY - 0.38, camY));
-    } else if (indoorBldg) {
-      camY = Math.min(indoorBldg.ceilingY - 0.38, camY);
+      camY = Math.max(floorInfo.floorY + 1.12, Math.min(floorInfo.ceilingY - 0.36, camY));
+    } else if (indoorBldg && floorInfo) {
+      camY = Math.min(floorInfo.ceilingY - 0.36, camY);
     }
     camera.position.set(camX, camY, camZ);
 
@@ -1237,15 +1299,23 @@ function animate(now) {
       if (keysDown.has('KeyE') || keysDown.has('Space')) camera.position.y += moveSpd * 0.8;
       if (keysDown.has('KeyQ') || keysDown.has('KeyC')) camera.position.y = Math.max(groundY + 1.5, camera.position.y - moveSpd * 0.8);
     } else {
-      const walkCol = resolvePlayerCollisions(camera.position.x, camera.position.z, 0.42);
+      const walkFootY = camera.position.y - 1.65;
+      const walkCol = resolvePlayerCollisions(camera.position.x, camera.position.z, 0.42, walkFootY);
       camera.position.x = walkCol.x;
       camera.position.z = walkCol.z;
       const walkIndoor = findIndoorBuilding(camera.position.x, camera.position.z, 0.25);
       const baseY = elevAt(camera.position.x, camera.position.z);
-      camera.position.y = walkIndoor
-        ? Math.min(walkIndoor.ceilingY - 0.38, Math.max(baseY, walkIndoor.floorY) + 1.65)
-        : baseY + 1.72;
-      updateIndoorHint(walkIndoor);
+      if (walkIndoor) {
+        const walkFloor = getIndoorFloorInfo(walkIndoor, camera.position.x, camera.position.z, walkFootY);
+        const targetWalkY = Math.min(walkFloor.ceilingY - 0.36, Math.max(baseY, walkFloor.floorY) + 1.65);
+        camera.position.y = walkFloor.onStairs
+          ? camera.position.y + (targetWalkY - camera.position.y) * Math.min(1, dt * 16)
+          : targetWalkY;
+        updateIndoorHint(walkIndoor, walkFloor.floorTag);
+      } else {
+        camera.position.y = baseY + 1.72;
+        updateIndoorHint(null, '');
+      }
     }
     _tmpLookTarget.copy(camera.position).add(_tmpLookDir);
     camera.lookAt(_tmpLookTarget);

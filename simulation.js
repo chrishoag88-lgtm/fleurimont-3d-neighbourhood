@@ -472,9 +472,9 @@ export function createCollider(DATA, obstacles = null) {
     }
   };
 
-  const addOBB = (x, z, hw, hd, cos, sin, category) => {
+  const addOBB = (x, z, hw, hd, cos, sin, category, minY = null, maxY = null) => {
     const rBound = Math.hypot(hw, hd);
-    const item = { kind: 'obb', category, x, z, hw, hd, cos, sin, rBound, _stamp: 0 };
+    const item = { kind: 'obb', category, x, z, hw, hd, cos, sin, rBound, minY, maxY, _stamp: 0 };
     insertItem(item, x - rBound, x + rBound, z - rBound, z + rBound);
   };
 
@@ -524,8 +524,20 @@ export function createCollider(DATA, obstacles = null) {
       wallLists.push(obstacles.wallColliders);
     }
     for (const list of wallLists) {
-      for (const [wx, wz, halfLen, halfThick, rotY] of list) {
-        addOBB(wx, wz, halfLen, halfThick, Math.cos(rotY), -Math.sin(rotY), 'wall');
+      for (const entry of list) {
+        if (Array.isArray(entry)) {
+          const [wx, wz, halfLen, halfThick, rotY, minY = null, maxY = null] = entry;
+          addOBB(wx, wz, halfLen, halfThick, Math.cos(rotY), -Math.sin(rotY), 'wall', minY, maxY);
+        } else if (entry && typeof entry === 'object') {
+          const wx = entry.wx ?? entry.x;
+          const wz = entry.wz ?? entry.z;
+          const halfLen = entry.halfLen ?? entry.hw;
+          const halfThick = entry.halfThick ?? entry.hd;
+          const rotY = entry.rotY ?? entry.ry ?? 0;
+          const minY = entry.minY ?? null;
+          const maxY = entry.maxY ?? null;
+          addOBB(wx, wz, halfLen, halfThick, Math.cos(rotY), -Math.sin(rotY), 'wall', minY, maxY);
+        }
       }
     }
   }
@@ -584,7 +596,14 @@ export function createCollider(DATA, obstacles = null) {
     return [px + pushX, pz + pushZ];
   }
 
-  function resolveCircle(x, z, radius = 0.42) {
+  function skipsByY(item, y) {
+    if (y === null || y === undefined) return false;
+    if (item.minY != null && y < item.minY - 0.5) return true;
+    if (item.maxY != null && y > item.maxY - 0.1) return true;
+    return false;
+  }
+
+  function resolveCircle(x, z, radius = 0.42, y = null) {
     let px = x;
     let pz = z;
     let hit = false;
@@ -603,6 +622,7 @@ export function createCollider(DATA, obstacles = null) {
             const item = bucket[i];
             if (item._stamp === stamp) continue;
             item._stamp = stamp;
+            if (skipsByY(item, y)) continue;
             const res = resolveItem(item, px, pz, radius);
             if (res) {
               px = res[0];
@@ -618,7 +638,7 @@ export function createCollider(DATA, obstacles = null) {
     return { x: px, z: pz, hit };
   }
 
-  function isBlocked(x, z, radius = 0.42, categories = null) {
+  function isBlocked(x, z, radius = 0.42, categories = null, y = null) {
     const stamp = ++queryStamp;
     const cx0 = Math.floor((x - radius - 2) / CELL);
     const cx1 = Math.floor((x + radius + 2) / CELL);
@@ -633,6 +653,7 @@ export function createCollider(DATA, obstacles = null) {
           if (item._stamp === stamp) continue;
           item._stamp = stamp;
           if (categories && !categories.includes(item.category)) continue;
+          if (skipsByY(item, y)) continue;
           if (resolveItem(item, x, z, radius)) return true;
         }
       }

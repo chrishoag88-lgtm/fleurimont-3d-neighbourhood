@@ -320,6 +320,32 @@ function getSharedAssets(texLib) {
     roughness: 0.3,
   });
 
+  // Upstairs bedroom, office & bathroom materials
+  const porcelainMat = new THREE.MeshStandardMaterial({
+    color: 0xf7f9fa,
+    roughness: 0.24,
+    metalness: 0.08,
+    emissive: 0xffe8cc,
+    emissiveIntensity: 0.08,
+  });
+  const mirrorMat = new THREE.MeshStandardMaterial({
+    color: 0xb8d4e8,
+    roughness: 0.06,
+    metalness: 0.85,
+  });
+  const bedSheetMat = new THREE.MeshStandardMaterial({
+    color: 0xf5f2eb,
+    roughness: 0.88,
+    emissive: 0xffe8c8,
+    emissiveIntensity: 0.08,
+  });
+  const duvetMats = [0x3b5978, 0x5c7a67, 0x854247, 0x8c7a64, 0x4b5c7a].map(
+    (col) => new THREE.MeshStandardMaterial({ color: col, roughness: 0.88, emissive: 0xffe4bc, emissiveIntensity: 0.08 })
+  );
+  const bookMats = [0xb84032, 0x2e649c, 0x3b7a4a, 0xd69a32, 0x6f4a85].map(
+    (col) => new THREE.MeshStandardMaterial({ color: col, roughness: 0.8 })
+  );
+
   // Resident materials
   const resFaceMat = new THREE.MeshStandardMaterial({ map: faceTex, roughness: 0.72, emissive: 0xffe4bc, emissiveIntensity: 0.08 });
   const resSkinMat = new THREE.MeshStandardMaterial({ color: 0xebbfa4, roughness: 0.75 });
@@ -416,6 +442,11 @@ function getSharedAssets(texLib) {
     pendantBulbMat,
     fireplaceBrickMat,
     fireGlowMat,
+    porcelainMat,
+    mirrorMat,
+    bedSheetMat,
+    duvetMats,
+    bookMats,
     resFaceMat,
     resSkinMat,
     resHairMats,
@@ -453,20 +484,19 @@ function localToWorld(cx, cz, cosA, sinA, u, v) {
   return [cx + cosA * u - sinA * v, cz + sinA * u + cosA * v];
 }
 
-// Helper: convert local wall segments into world-space OBB colliders [wx, wz, halfLen, halfThick, rotY]
-// Matches simulation.js createCollider: addOBB(wx, wz, halfLen, halfThick, Math.cos(-rotY), Math.sin(-rotY), 'wall')
-export function wallSegmentsToWorldColliders(wallSegments, cx, cz, ang) {
+// Helper: convert local wall segments into world-space OBB colliders [wx, wz, halfLen, halfThick, rotY, minY?, maxY?]
+// Matches simulation.js createCollider: addOBB(wx, wz, halfLen, halfThick, Math.cos(rotY), -Math.sin(rotY), 'wall', minY, maxY)
+export function wallSegmentsToWorldColliders(wallSegments, cx, cz, ang, elev = 0) {
   const cosA = Math.cos(ang);
   const sinA = Math.sin(ang);
   const out = [];
   for (const seg of wallSegments) {
     const [wx, wz] = localToWorld(cx, cz, cosA, sinA, seg.lx, seg.lz);
-    if (seg.axis === 'X') {
-      // Wall runs along local X (side wall at z = ±halfW)
-      out.push([wx, wz, seg.halfLen, seg.halfThick, -ang]);
+    const rotY = seg.axis === 'X' ? -ang : -ang - Math.PI * 0.5;
+    if (seg.minY != null && seg.maxY != null) {
+      out.push([wx, wz, seg.halfLen, seg.halfThick, rotY, elev + seg.minY, elev + seg.maxY]);
     } else {
-      // Wall runs along local Z (front/back wall at x = ±halfD)
-      out.push([wx, wz, seg.halfLen, seg.halfThick, -ang - Math.PI * 0.5]);
+      out.push([wx, wz, seg.halfLen, seg.halfThick, rotY]);
     }
   }
   return out;
@@ -734,11 +764,159 @@ export function createHollowShell(opts = {}) {
     group.add(frontFloor, backFloor);
   }
 
-  // 3. Interior Ceiling Slab at ceilingY
-  const ceilSlab = new THREE.Mesh(new THREE.BoxGeometry(d - 0.04, 0.14, w - 0.04), assets.ceilingMat);
-  ceilSlab.position.set(0, ceilingY + 0.05, 0);
-  ceilSlab.receiveShadow = true;
-  group.add(ceilSlab);
+  // 3. Interior Ceiling Slab at ceilingY (+ Stairwell Cutout & Wooden Staircase for 2-Storey Homes!)
+  const hasUpperFloor = upperH > 0.2 && !isGarage;
+  const slabThick = 0.14;
+  const upperFloorY = hasUpperFloor ? ceilingY + slabThick : null;
+  const upperCeilingY = hasUpperFloor ? upperFloorY + upperH : null;
+
+  let stair = null;
+  let stairwell = null;
+  let stairSide = 0;
+
+  if (hasUpperFloor) {
+    // Place staircase along one side wall clear of front/back doors (entry-hall side by default)
+    stairSide = opts.stairSide === 1 || opts.stairSide === -1 ? opts.stairSide : defaultFrontZ <= 0 ? -1 : 1;
+    const stairW = Math.min(1.18, Math.max(0.96, w * 0.13));
+    const stairRun = Math.min(3.55, Math.max(2.6, d - 3.1));
+    const uStart = Math.min(halfD - 1.45, stairRun * 0.5);
+    const uEnd = Math.max(-halfD + 1.45, uStart - stairRun);
+    const vMin = stairSide < 0 ? -halfW + wallThick + 0.04 : halfW - wallThick - 0.04 - stairW;
+    const vMax = vMin + stairW;
+
+    stair = {
+      axis: 'x',
+      start: uStart,
+      end: uEnd,
+      crossMin: vMin,
+      crossMax: vMax,
+      y0: floorY,
+      y1: upperFloorY,
+    };
+    stairwell = {
+      uMin: Math.min(uStart, uEnd) - 0.12,
+      uMax: Math.max(uStart, uEnd) + 0.12,
+      vMin: vMin - 0.04,
+      vMax: vMax + 0.04,
+    };
+
+    // Build 1st-floor ceiling + 2nd-floor oak hardwood floor from 4 slabs surrounding the rectangular stairwell cutout
+    const inUMin = -halfD + 0.04;
+    const inUMax = halfD - 0.04;
+    const inVMin = -halfW + 0.04;
+    const inVMax = halfW - 0.04;
+    const addFloorCeilingPiece = (u0, u1, v0, v1) => {
+      const lenU = u1 - u0;
+      const lenV = v1 - v0;
+      if (lenU < 0.06 || lenV < 0.06) return;
+      const mu = (u0 + u1) * 0.5;
+      const mv = (v0 + v1) * 0.5;
+      // White 1st-floor ceiling underside
+      const cMesh = new THREE.Mesh(new THREE.BoxGeometry(lenU, 0.06, lenV), assets.ceilingMat);
+      cMesh.position.set(mu, ceilingY + 0.03, mv);
+      cMesh.receiveShadow = true;
+      // Warm honey oak 2nd-floor hardwood top
+      const fMesh = makeWorldBox(lenU, 0.08, lenV, assets.oakFloorMat, 0.55);
+      fMesh.position.set(mu, ceilingY + 0.10, mv);
+      fMesh.receiveShadow = true;
+      group.add(cMesh, fMesh);
+    };
+
+    addFloorCeilingPiece(stairwell.uMax, inUMax, inVMin, inVMax); // Front of stairwell
+    addFloorCeilingPiece(inUMin, stairwell.uMin, inVMin, inVMax); // Back of stairwell
+    addFloorCeilingPiece(stairwell.uMin, stairwell.uMax, inVMin, stairwell.vMin); // -Z beside stairwell
+    addFloorCeilingPiece(stairwell.uMin, stairwell.uMax, stairwell.vMax, inVMax); // +Z beside stairwell
+
+    // Build Interior Wooden Staircase (13 treads + risers + stringers + handrail & balusters)
+    const nSteps = 13;
+    const totalRise = upperFloorY - floorY;
+    const stepRise = totalRise / nSteps;
+    const stepRun = (uEnd - uStart) / nSteps; // negative (rising toward -X)
+    const absRun = Math.abs(stepRun);
+    const vMid = (vMin + vMax) * 0.5;
+
+    for (let s = 0; s < nSteps; s++) {
+      const treadY = floorY + (s + 1) * stepRise;
+      const treadU = uStart + (s + 0.5) * stepRun;
+      // Oak tread
+      const tread = new THREE.Mesh(new THREE.BoxGeometry(absRun + 0.04, 0.055, stairW), assets.woodOakMat);
+      tread.position.set(treadU, treadY - 0.025, vMid);
+      tread.receiveShadow = true;
+      // White riser
+      const riser = new THREE.Mesh(new THREE.BoxGeometry(0.035, stepRise, stairW - 0.02), trimMat);
+      riser.position.set(uStart + s * stepRun, treadY - stepRise * 0.5, vMid);
+      group.add(tread, riser);
+    }
+
+    // Sloped dark-wood stringers on both sides of the staircase
+    const runLen = Math.hypot(Math.abs(uEnd - uStart), totalRise);
+    const slopeAng = Math.atan2(totalRise, Math.abs(uEnd - uStart)); // rises as X decreases -> +Z rotation
+    const midU = (uStart + uEnd) * 0.5;
+    const midY = (floorY + upperFloorY) * 0.5;
+    for (const sv of [vMin + 0.03, vMax - 0.03]) {
+      const stringer = new THREE.Mesh(new THREE.BoxGeometry(runLen + 0.1, 0.22, 0.06), assets.woodDarkMat);
+      stringer.position.set(midU, midY - 0.12, sv);
+      stringer.rotation.z = -slopeAng;
+      group.add(stringer);
+    }
+
+    // Open-side handrail + balusters + newel posts (on the side facing room center)
+    const railV = stairSide < 0 ? vMax - 0.04 : vMin + 0.04;
+    const railH = 0.88;
+    const handrail = new THREE.Mesh(new THREE.BoxGeometry(runLen + 0.16, 0.065, 0.075), assets.woodDarkMat);
+    handrail.position.set(midU, midY + railH, railV);
+    handrail.rotation.z = -slopeAng;
+    group.add(handrail);
+
+    // Bottom & top newel posts
+    const botNewel = new THREE.Mesh(new THREE.BoxGeometry(0.09, railH + 0.14, 0.09), assets.woodDarkMat);
+    botNewel.position.set(uStart + 0.04, floorY + (railH + 0.14) * 0.5, railV);
+    const topNewel = new THREE.Mesh(new THREE.BoxGeometry(0.09, railH + 0.14, 0.09), assets.woodDarkMat);
+    topNewel.position.set(uEnd - 0.04, upperFloorY + (railH + 0.14) * 0.5, railV);
+    group.add(botNewel, topNewel);
+
+    // Vertical balusters along the stair run
+    for (let b = 1; b < nSteps; b += 2) {
+      const bu = uStart + (b + 0.5) * stepRun;
+      const by = floorY + (b + 1) * stepRise;
+      const bal = new THREE.Mesh(new THREE.BoxGeometry(0.035, railH, 0.035), trimMat);
+      bal.position.set(bu, by + railH * 0.5, railV);
+      group.add(bal);
+    }
+
+    // 2nd-floor stairwell safety guardrail along the open long edge & front (bottom-end) edge,
+    // leaving the top-end edge (uEnd) completely open to walk onto the 2nd floor!
+    const guardH = 0.90;
+    const guardV = stairSide < 0 ? stairwell.vMax + 0.04 : stairwell.vMin - 0.04;
+    const longGuardLen = stairwell.uMax - stairwell.uMin;
+    const longGuardMidU = (stairwell.uMax + stairwell.uMin) * 0.5;
+    const longTopRail = new THREE.Mesh(new THREE.BoxGeometry(longGuardLen + 0.08, 0.06, 0.07), assets.woodDarkMat);
+    longTopRail.position.set(longGuardMidU, upperFloorY + guardH, guardV);
+    const longMidRail = new THREE.Mesh(new THREE.BoxGeometry(longGuardLen, 0.04, 0.04), trimMat);
+    longMidRail.position.set(longGuardMidU, upperFloorY + guardH * 0.48, guardV);
+    group.add(longTopRail, longMidRail);
+    const nGuardPosts = Math.max(3, Math.round(longGuardLen / 0.75) + 1);
+    for (let gp = 0; gp < nGuardPosts; gp++) {
+      const pu = stairwell.uMin + (gp / (nGuardPosts - 1)) * longGuardLen;
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.045, guardH, 0.045), trimMat);
+      post.position.set(pu, upperFloorY + guardH * 0.5, guardV);
+      group.add(post);
+    }
+    // End guardrail at uMax (above bottom of stairs)
+    const endGuardLen = stairwell.vMax - stairwell.vMin;
+    const endTopRail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, endGuardLen + 0.08), assets.woodDarkMat);
+    endTopRail.position.set(stairwell.uMax + 0.04, upperFloorY + guardH, vMid);
+    const endMidRail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, endGuardLen), trimMat);
+    endMidRail.position.set(stairwell.uMax + 0.04, upperFloorY + guardH * 0.48, vMid);
+    const cornerPost = new THREE.Mesh(new THREE.BoxGeometry(0.08, guardH + 0.06, 0.08), assets.woodDarkMat);
+    cornerPost.position.set(stairwell.uMax + 0.04, upperFloorY + (guardH + 0.06) * 0.5, guardV);
+    group.add(endTopRail, endMidRail, cornerPost);
+  } else {
+    const ceilSlab = new THREE.Mesh(new THREE.BoxGeometry(d - 0.04, slabThick, w - 0.04), assets.ceilingMat);
+    ceilSlab.position.set(0, ceilingY + 0.05, 0);
+    ceilSlab.receiveShadow = true;
+    group.add(ceilSlab);
+  }
 
   // 4. Plan Cutout Openings for all 4 walls
   const winBottom = floorY + 0.82;
@@ -999,34 +1177,146 @@ export function createHollowShell(opts = {}) {
   sconceBulb.position.set(halfD + 0.10, floorY + 1.88, defaultFrontZ + frontDoorW * 0.5 + 0.28);
   group.add(sconceHousing, sconceBulb);
 
-  // 8. Upper 2nd Storey Exterior (for 2-storey cottages / split-levels)
+  // 8. Hollow 2nd Storey Exterior Walls with Cutout See-Through Windows + 2nd-Floor Ceiling
   let roofBaseY = ceilingY + 0.12;
-  if (upperH > 0.2) {
-    const upperBox = makeWorldBox(d, upperH, w, upperExtMat, 0.35);
-    upperBox.position.set(0, roofBaseY + upperH * 0.5, 0);
-    upperBox.castShadow = true;
-    upperBox.receiveShadow = true;
-    group.add(upperBox);
+  if (hasUpperFloor) {
+    const upWinBot = upperFloorY + Math.min(0.78, upperH * 0.30);
+    const upWinTop = Math.min(upperCeilingY - 0.22, upWinBot + Math.min(1.32, upperH * 0.52));
 
-    if (includeUpperWindows) {
-      const winY = roofBaseY + upperH * 0.52;
-      const nFront = Math.max(2, Math.min(4, Math.floor(w / 3.2)));
-      for (let i = 0; i < nFront; i++) {
-        const wz = -halfW + ((i + 0.5) / nFront) * w;
-        const uw = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.25, 1.35), assets.upperWinMat);
-        uw.position.set(halfD + 0.02, winY, wz);
-        const uf = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.38, 1.48), trimMat);
-        uf.position.set(halfD + 0.01, winY, wz);
-        group.add(uf, uw);
-
-        const bw = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.25, 1.35), assets.upperWinMat);
-        bw.position.set(-halfD - 0.02, winY, wz);
-        const bf = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.38, 1.48), trimMat);
-        bf.position.set(-halfD - 0.01, winY, wz);
-        group.add(bf, bw);
+    const makeAutoUpperWindows = (span, customList, isSide = false) => {
+      if (Array.isArray(customList)) {
+        return customList.map((uw) => ({
+          center: isSide ? uw.x : uw.z,
+          width: uw.w,
+          yMin: uw.yBottom ?? upWinBot,
+          yMax: (uw.yBottom ?? upWinBot) + (uw.h ?? (upWinTop - upWinBot)),
+          kind: 'window',
+        }));
       }
+      if (!includeUpperWindows) return [];
+      const list = [];
+      if (isSide) {
+        if (span >= 7.2) {
+          list.push({ center: span * 0.22, width: 1.42, yMin: upWinBot, yMax: upWinTop, kind: 'window' });
+          list.push({ center: -span * 0.22, width: 1.38, yMin: upWinBot, yMax: upWinTop, kind: 'window' });
+        } else if (span >= 4.5) {
+          list.push({ center: 0, width: 1.4, yMin: upWinBot, yMax: upWinTop, kind: 'window' });
+        }
+      } else {
+        const nWins = Math.max(2, Math.min(4, Math.floor(span / 3.3)));
+        for (let i = 0; i < nWins; i++) {
+          const wz = -span * 0.5 + ((i + 0.5) / nWins) * span;
+          list.push({ center: wz, width: Math.min(1.55, span / nWins - 1.15), yMin: upWinBot, yMax: upWinTop, kind: 'window' });
+        }
+      }
+      return list;
+    };
+
+    const upFrontOpens = makeAutoUpperWindows(w, opts.upperFrontWindows, false);
+    const upBackOpens = makeAutoUpperWindows(w, opts.upperBackWindows, false);
+    const upNegZOpens = makeAutoUpperWindows(d, opts.upperSideWindows?.negZ, true);
+    const upPosZOpens = makeAutoUpperWindows(d, opts.upperSideWindows?.posZ, true);
+
+    const dummyUpperSegs = [];
+    buildCutoutWall({
+      group,
+      axis: 'Z',
+      wallPos: halfD - wallThick * 0.5,
+      outSign: 1,
+      spanMin: -halfW,
+      spanMax: halfW,
+      yBottom: upperFloorY,
+      yTop: upperCeilingY,
+      openings: upFrontOpens,
+      wallThick,
+      extMat: upperExtMat,
+      intMat: intWallMat,
+      trimMat,
+      glassMat: assets.clearGlassMat,
+      wallSegmentsOut: dummyUpperSegs,
+    });
+    buildCutoutWall({
+      group,
+      axis: 'Z',
+      wallPos: -halfD + wallThick * 0.5,
+      outSign: -1,
+      spanMin: -halfW,
+      spanMax: halfW,
+      yBottom: upperFloorY,
+      yTop: upperCeilingY,
+      openings: upBackOpens,
+      wallThick,
+      extMat: upperExtMat,
+      intMat: intWallMat,
+      trimMat,
+      glassMat: assets.clearGlassMat,
+      wallSegmentsOut: dummyUpperSegs,
+    });
+    buildCutoutWall({
+      group,
+      axis: 'X',
+      wallPos: -halfW + wallThick * 0.5,
+      outSign: -1,
+      spanMin: -halfD + wallThick,
+      spanMax: halfD - wallThick,
+      yBottom: upperFloorY,
+      yTop: upperCeilingY,
+      openings: upNegZOpens,
+      wallThick,
+      extMat: upperExtMat,
+      intMat: intWallMat,
+      trimMat,
+      glassMat: assets.clearGlassMat,
+      wallSegmentsOut: dummyUpperSegs,
+    });
+    buildCutoutWall({
+      group,
+      axis: 'X',
+      wallPos: halfW - wallThick * 0.5,
+      outSign: 1,
+      spanMin: -halfD + wallThick,
+      spanMax: halfD - wallThick,
+      yBottom: upperFloorY,
+      yTop: upperCeilingY,
+      openings: upPosZOpens,
+      wallThick,
+      extMat: upperExtMat,
+      intMat: intWallMat,
+      trimMat,
+      glassMat: assets.clearGlassMat,
+      wallSegmentsOut: dummyUpperSegs,
+    });
+
+    // Add 2nd-floor-only exterior wall colliders across the 1st-floor doorway gaps so upstairs is fully enclosed!
+    const upHalfThick = Math.max(0.14, wallThick * 0.55);
+    wallSegments.push({
+      axis: 'Z',
+      lx: halfD - wallThick * 0.5,
+      lz: defaultFrontZ,
+      halfLen: frontDoorW * 0.5,
+      halfThick: upHalfThick,
+      minY: upperFloorY,
+      maxY: upperCeilingY,
+    });
+    if (hasBackDoor && !isGarage) {
+      wallSegments.push({
+        axis: 'Z',
+        lx: -halfD + wallThick * 0.5,
+        lz: defaultBackZ,
+        halfLen: backDoorW * 0.5,
+        halfThick: upHalfThick,
+        minY: upperFloorY,
+        maxY: upperCeilingY,
+      });
     }
-    roofBaseY += upperH;
+
+    // 2nd-floor ceiling slab right under the roof
+    const upperCeilSlab = new THREE.Mesh(new THREE.BoxGeometry(d - 0.04, 0.12, w - 0.04), assets.ceilingMat);
+    upperCeilSlab.position.set(0, upperCeilingY + 0.04, 0);
+    upperCeilSlab.receiveShadow = true;
+    group.add(upperCeilSlab);
+
+    roofBaseY = upperCeilingY + 0.10;
   }
 
   // 9. Pitched Roof + Gable Ends + White Fascia Trim + Optional Chimney
@@ -1078,7 +1368,13 @@ export function createHollowShell(opts = {}) {
       dr.wx = wx;
       dr.wz = wz;
     }
-    wallColliders = wallSegmentsToWorldColliders(wallSegments, worldTransform.cx, worldTransform.cz, worldTransform.ang);
+    wallColliders = wallSegmentsToWorldColliders(
+      wallSegments,
+      worldTransform.cx,
+      worldTransform.cz,
+      worldTransform.ang,
+      worldTransform.elev || 0
+    );
   }
 
   return {
@@ -1088,6 +1384,12 @@ export function createHollowShell(opts = {}) {
     wallColliders,
     floorY,
     ceilingY,
+    hasUpperFloor,
+    upperFloorY,
+    upperCeilingY,
+    stair,
+    stairwell,
+    stairSide,
     frontDoorZ: defaultFrontZ,
     backDoorZ: defaultBackZ,
     christmasGroup,
@@ -1191,6 +1493,8 @@ export function populateHouseInterior(group, opts = {}) {
     style = 'bungalow_vinyl',
     frontDoorZ = 0,
     backDoorZ = 0,
+    stairSide = 0,
+    stairwell = null,
     isGarage = false,
     texLib = null,
   } = opts;
@@ -1233,23 +1537,27 @@ export function populateHouseInterior(group, opts = {}) {
   const counterMat = seed % 2 === 0 ? assets.counterDarkMat : assets.counterLightMat;
   const fridgeMat = seed % 3 === 0 ? assets.applianceWhiteMat : assets.stainlessMat;
 
-  // Determine which Z side is the living room (opposite the front door so entry is wide open!)
-  const livingSign = frontDoorZ <= 0 ? 1 : -1;
-  // Kitchen on opposite Z side from back patio door so patio exit is unobstructed
-  const kitchenSign = backDoorZ >= 0 ? -1 : 1;
+  // Determine which Z side is the living room (opposite the front door & staircase so entry & stairs are wide open!)
+  const livingSign = stairSide !== 0 ? -stairSide : frontDoorZ <= 0 ? 1 : -1;
+  // Kitchen on opposite Z side from staircase (if present) or back patio door
+  const kitchenSign = stairSide !== 0 ? -stairSide : backDoorZ >= 0 ? -1 : 1;
 
   // --- A. Partial Interior Partition Wall with Wide Open Archway (>= 2.8m wide) ---
   const archW = Math.max(2.8, Math.min(4.6, w * 0.44));
   const wingW = Math.max(0.4, (w - 0.5 - archW) * 0.5);
   if (wingW > 0.65) {
     for (const sgn of [-1, 1]) {
+      // Never block the interior staircase on stairSide!
+      if (stairwell && sgn === stairSide) continue;
       const wing = new THREE.Mesh(new THREE.BoxGeometry(0.16, groundH, wingW), intWallMat);
       wing.position.set(0, floorY + groundH * 0.5, sgn * (halfW - 0.26 - wingW * 0.5));
       group.add(wing);
     }
-    const archHeader = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.42, archW + 0.1), intWallMat);
-    archHeader.position.set(0, ceilingY - 0.21, 0);
-    group.add(archHeader);
+    if (!stairwell) {
+      const archHeader = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.42, archW + 0.1), intWallMat);
+      archHeader.position.set(0, ceilingY - 0.21, 0);
+      group.add(archHeader);
+    }
   }
 
   // --- B. Living Room (Front half, x > 0.3) ---
@@ -1336,8 +1644,8 @@ export function populateHouseInterior(group, opts = {}) {
   artCanvas.position.set(0.155, floorY + 1.62, livingSign * (halfW - 1.15));
   group.add(artFrame, artCanvas);
 
-  // Optional brick fireplace with glowing embers on side wall opposite front door (on ~45% of homes)
-  if (seed % 2 === 1 && w >= 10) {
+  // Optional brick fireplace with glowing embers on side wall opposite living room (skip if staircase is on that wall!)
+  if (seed % 2 === 1 && w >= 10 && (!stairwell || -livingSign !== stairSide)) {
     const fpX = 0.95;
     const fpZ = -livingSign * (halfW - wallMargin - 0.25);
     const fpBody = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.25, 0.45), assets.fireplaceBrickMat);
@@ -1525,6 +1833,255 @@ export function populateHouseInterior(group, opts = {}) {
     tvScreens,
     interiorLights,
     christmasGroup,
+  };
+}
+
+/**
+ * 2b. Reusable 2nd-Floor Upstairs Interior Populator
+ * Furnishes the 2nd floor of two-storey Fleurimont homes (keeping the stairwell opening & top landing clear!):
+ * - Master Bedroom (queen bed w/ headboard, pillows, duvet, nightstands + warm lamps, dresser, rug)
+ * - 2nd Bedroom / Home Office (desk + chair + glowing monitor + lamp + bookshelf + optional twin bed)
+ * - Upstairs Bathroom (ceramic tile floor, vanity + mirror + sink, toilet, bathtub)
+ * - Open-doorway partition walls, warm ceiling pendant lights, and an animated upstairs resident!
+ */
+export function populateUpperFloor(group, opts = {}) {
+  const {
+    w = 12.0,
+    d = 9.0,
+    upperFloorY = 3.25,
+    upperH = 2.55,
+    seed = 1,
+    stairSide = -1,
+    stairwell = null,
+    texLib = null,
+  } = opts;
+
+  const assets = getSharedAssets(texLib);
+  const rng = makeRng(seed * 59 + 19);
+  const halfD = d * 0.5;
+  const halfW = w * 0.5;
+  const wallMargin = 0.36;
+  const upperCeilingY = upperFloorY + upperH;
+
+  const residents = [];
+  const tvScreens = [];
+  const interiorLights = [];
+
+  const intWallMat = assets.intWallMats[(seed + 1) % assets.intWallMats.length];
+  const duvetMat = assets.duvetMats[seed % assets.duvetMats.length];
+  const duvetMat2 = assets.duvetMats[(seed + 2) % assets.duvetMats.length];
+
+  // Main rooms sit on the opposite Z side from the stairwell (`mainSign`), with a clear landing & hallway
+  const mainSign = stairSide <= 0 ? 1 : -1;
+
+  // --- A. Open-Doorway Interior Partition Walls ---
+  // Divide front Master Bedroom (+X) from rear Bathroom/Office (-X) on mainSign side, leaving wide open doorways!
+  const partLenZ = Math.max(1.2, halfW - 1.55);
+  if (partLenZ > 1.0) {
+    const midPart = new THREE.Mesh(new THREE.BoxGeometry(0.14, upperH, partLenZ), intWallMat);
+    midPart.position.set(0.15, upperFloorY + upperH * 0.5, mainSign * (halfW - 0.26 - partLenZ * 0.5));
+    group.add(midPart);
+  }
+  // Short hall partition separating landing from master bedroom with wide open 1.5m doorway
+  const hallPartLenX = Math.max(1.0, halfD - 2.1);
+  if (hallPartLenX > 0.9) {
+    const hallPart = new THREE.Mesh(new THREE.BoxGeometry(hallPartLenX, upperH, 0.14), intWallMat);
+    hallPart.position.set(halfD - 0.28 - hallPartLenX * 0.5, upperFloorY + upperH * 0.5, mainSign * 0.65);
+    group.add(hallPart);
+  }
+
+  // --- B. Master Bedroom (Front +X, mainSign side — overlooking the street!) ---
+  const mbX = Math.max(1.35, halfD * 0.52);
+  const mbZ = mainSign * Math.min(halfW - 1.75, Math.max(1.65, w * 0.26));
+
+  // Woven bedroom rug
+  const bedRug = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.024, 2.4), assets.rugMat);
+  bedRug.position.set(mbX, upperFloorY + 0.012, mbZ);
+  group.add(bedRug);
+
+  // Queen Bed (headboard against side wall `mainSign * halfW`, facing toward hallway/window)
+  const bedG = new THREE.Group();
+  const bedWallZ = mainSign * (halfW - wallMargin - 1.08);
+  bedG.position.set(mbX, upperFloorY, bedWallZ);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.68, 0.30, 2.02), assets.woodDarkMat);
+  frame.position.y = 0.15;
+  const mattress = new THREE.Mesh(new THREE.BoxGeometry(1.60, 0.22, 1.94), assets.bedSheetMat);
+  mattress.position.y = 0.38;
+  const duvet = new THREE.Mesh(new THREE.BoxGeometry(1.64, 0.16, 1.38), duvetMat);
+  duvet.position.set(0, 0.44, -mainSign * 0.26);
+  const headboard = new THREE.Mesh(new THREE.BoxGeometry(1.74, 1.02, 0.12), assets.woodDarkMat);
+  headboard.position.set(0, 0.54, mainSign * 0.96);
+  const pilL = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.15, 0.34), assets.bedSheetMat);
+  pilL.position.set(-0.38, 0.55, mainSign * 0.72);
+  const pilR = pilL.clone();
+  pilR.position.x = 0.38;
+  bedG.add(frame, mattress, duvet, headboard, pilL, pilR);
+  group.add(bedG);
+
+  // Nightstands + Warm Glowing Bedside Lamps flanking the headboard
+  for (const nsOff of [-1.14, 1.14]) {
+    const nsX = mbX + nsOff;
+    if (nsX > halfD - 0.55 || nsX < 0.55) continue;
+    const nsZ = mainSign * (halfW - wallMargin - 0.32);
+    const ns = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.52, 0.46), assets.woodOakMat);
+    ns.position.set(nsX, upperFloorY + 0.26, nsZ);
+    const lBase = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.22, 0.10), assets.woodDarkMat);
+    lBase.position.set(nsX, upperFloorY + 0.62, nsZ);
+    const lShade = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.22, 0.24), assets.lampShadeMat);
+    lShade.position.set(nsX, upperFloorY + 0.78, nsZ);
+    group.add(ns, lBase, lShade);
+  }
+
+  // Dresser against front-ish / partition wall
+  const dresser = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.84, 1.32), assets.woodOakMat);
+  dresser.position.set(0.55, upperFloorY + 0.42, mainSign * (halfW - 1.55));
+  group.add(dresser);
+
+  // --- C. Upstairs Bathroom (Rear -X, mainSign side) ---
+  const bathMinX = -halfD + wallMargin;
+  const bathW = Math.min(2.6, halfW * 0.45);
+  const bathD = Math.min(2.8, halfD * 0.55);
+  const bathCenterX = bathMinX + bathD * 0.5;
+  const bathCenterZ = mainSign * (halfW - wallMargin - bathW * 0.5);
+
+  // Ceramic tile floor zone in bathroom
+  const bathTile = makeWorldBox(bathD, 0.025, bathW, assets.tileFloorMat, 0.7);
+  bathTile.position.set(bathCenterX, upperFloorY + 0.012, bathCenterZ);
+  group.add(bathTile);
+
+  // Bathtub against rear wall (-X)
+  const tubX = -halfD + wallMargin + 0.42;
+  const tubZ = mainSign * (halfW - wallMargin - 0.88);
+  const tubOuter = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.54, 1.58), assets.porcelainMat);
+  tubOuter.position.set(tubX, upperFloorY + 0.27, tubZ);
+  const tubFaucet = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.24, 0.12), assets.stainlessMat);
+  tubFaucet.position.set(tubX, upperFloorY + 0.64, tubZ + mainSign * 0.65);
+  group.add(tubOuter, tubFaucet);
+
+  // Vanity Cabinet + Sink + Wall Mirror + Light Bar
+  const vanX = bathCenterX + 0.52;
+  const vanZ = mainSign * (halfW - wallMargin - 0.30);
+  const vanity = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.80, 0.50), assets.cabWhiteMat);
+  vanity.position.set(vanX, upperFloorY + 0.40, vanZ);
+  const sinkBasin = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.08, 0.36), assets.porcelainMat);
+  sinkBasin.position.set(vanX, upperFloorY + 0.82, vanZ);
+  const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.68, 0.04), assets.mirrorMat);
+  mirror.position.set(vanX, upperFloorY + 1.44, mainSign * (halfW - wallMargin - 0.04));
+  const mirrorLight = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.09, 0.10), assets.pendantBulbMat);
+  mirrorLight.position.set(vanX, upperFloorY + 1.86, mainSign * (halfW - wallMargin - 0.08));
+  group.add(vanity, sinkBasin, mirror, mirrorLight);
+
+  // Toilet
+  const toiX = bathCenterX - 0.15;
+  const toiZ = mainSign * (halfW - wallMargin - bathW + 0.42);
+  const toiBowl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.40, 0.48), assets.porcelainMat);
+  toiBowl.position.set(toiX, upperFloorY + 0.20, toiZ);
+  const toiTank = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.44, 0.18), assets.porcelainMat);
+  toiTank.position.set(toiX, upperFloorY + 0.56, toiZ - mainSign * 0.18);
+  group.add(toiBowl, toiTank);
+
+  // --- D. 2nd Bedroom / Home Office (Clear of Stairwell — Front/Center on stairSide or Rear-Center!) ---
+  // Place desk + glowing monitor + bookshelf cleanly in front of the stairwell (u > stairwell.uMax + 0.45)
+  // or in the rear center opposite the bathroom if stairwell leaves less front room
+  const frontClearStart = stairwell ? stairwell.uMax + 0.45 : 0.6;
+  const useFrontOffice = halfD - frontClearStart >= 1.35;
+  const offX = useFrontOffice ? halfD - wallMargin - 0.42 : -halfD + wallMargin + 0.55;
+  const offZ = useFrontOffice ? stairSide * Math.min(halfW - 1.35, Math.max(0.85, w * 0.22)) : 0;
+
+  // Wooden Desk + Office Chair + Glowing Computer Monitor
+  const desk = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.74, 1.32), assets.woodOakMat);
+  desk.position.set(offX, upperFloorY + 0.37, offZ);
+  const monStand = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.18, 0.18), assets.tvBodyMat);
+  monStand.position.set(offX + (useFrontOffice ? 0.10 : -0.10), upperFloorY + 0.83, offZ);
+  const monFrame = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 0.68), assets.tvBodyMat);
+  monFrame.position.set(offX + (useFrontOffice ? 0.12 : -0.12), upperFloorY + 1.08, offZ);
+  const monMat = new THREE.MeshStandardMaterial({
+    map: assets.tvTex,
+    emissive: 0x99d0ff,
+    emissiveMap: assets.tvTex,
+    emissiveIntensity: 0.95,
+    roughness: 0.25,
+  });
+  const monScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.60, 0.35), monMat);
+  monScreen.rotation.y = useFrontOffice ? -Math.PI * 0.5 : Math.PI * 0.5;
+  monScreen.position.set(offX + (useFrontOffice ? 0.08 : -0.08), upperFloorY + 1.08, offZ);
+  tvScreens.push({ mat: monMat, phase: rng() * 10 });
+
+  // Desk lamp
+  const dLamp = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.24, 0.16), assets.lampShadeMat);
+  dLamp.position.set(offX, upperFloorY + 0.88, offZ + 0.48);
+
+  // Office Chair
+  const chairX = offX + (useFrontOffice ? -0.64 : 0.64);
+  const oChair = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.46), assets.sofaMats[1]);
+  oChair.position.set(chairX, upperFloorY + 0.23, offZ);
+  const oChairBack = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.52, 0.46), assets.sofaMats[1]);
+  oChairBack.position.set(chairX + (useFrontOffice ? -0.20 : 0.20), upperFloorY + 0.66, offZ);
+  group.add(desk, monStand, monFrame, monScreen, dLamp, oChair, oChairBack);
+
+  // Bookshelf with colorful voxel books beside office
+  const shelfZ = stairSide * (halfW - wallMargin - 0.26);
+  const shelfX = useFrontOffice ? halfD - 1.15 : -halfD + 1.15;
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.88, 1.56, 0.34), assets.woodDarkMat);
+  shelf.position.set(shelfX, upperFloorY + 0.78, shelfZ);
+  group.add(shelf);
+  for (let row = 0; row < 3; row++) {
+    for (let bi = 0; bi < 4; bi++) {
+      const bk = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.24, 0.22),
+        assets.bookMats[(row * 4 + bi + seed) % assets.bookMats.length]
+      );
+      bk.position.set(shelfX - 0.26 + bi * 0.17, upperFloorY + 0.42 + row * 0.42, shelfZ - stairSide * 0.08);
+      group.add(bk);
+    }
+  }
+
+  // Optional Twin Bed in 2nd bedroom area if house is wide enough and rear-center is free
+  if (w >= 11.5 && useFrontOffice) {
+    const tbX = -halfD + wallMargin + 0.95;
+    const tbZ = 0.0;
+    const tbFrame = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.28, 1.05), assets.woodOakMat);
+    tbFrame.position.set(tbX, upperFloorY + 0.14, tbZ);
+    const tbMatt = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.20, 0.98), assets.bedSheetMat);
+    tbMatt.position.set(tbX, upperFloorY + 0.36, tbZ);
+    const tbDuv = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.14, 1.00), duvetMat2);
+    tbDuv.position.set(tbX + 0.22, upperFloorY + 0.42, tbZ);
+    const tbPil = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.56), assets.bedSheetMat);
+    tbPil.position.set(tbX - 0.65, upperFloorY + 0.52, tbZ);
+    group.add(tbFrame, tbMatt, tbDuv, tbPil);
+  }
+
+  // --- E. Warm Upstairs Ceiling Pendant Lights ---
+  const upPendants = [
+    [mbX, mbZ],
+    [bathCenterX, bathCenterZ],
+    [offX + (useFrontOffice ? -0.5 : 0.5), offZ],
+    [0, 0],
+  ];
+  for (const [px, pz] of upPendants) {
+    const cord = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.28, 0.04), assets.darkTrimMat);
+    cord.position.set(px, upperCeilingY - 0.14, pz);
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.18, 0.24), assets.pendantBulbMat);
+    bulb.position.set(px, upperCeilingY - 0.30, pz);
+    group.add(cord, bulb);
+  }
+
+  // --- F. Animated Upstairs Resident (working at home office desk!) ---
+  const worker = makeIndoorResident(assets, seed * 83 + 29, 'seated');
+  worker.root.position.set(chairX, upperFloorY - 0.26, offZ);
+  worker.root.rotation.y = useFrontOffice ? 0 : Math.PI; // face desk & glowing monitor
+  group.add(worker.root);
+  residents.push({
+    ...worker,
+    activity: 'desk',
+    phase: rng() * 6.28,
+    baseY: upperFloorY - 0.26,
+  });
+
+  return {
+    residents,
+    tvScreens,
+    interiorLights,
   };
 }
 
@@ -1832,6 +2389,11 @@ function mergeExternalEntryIntoState(entry, state) {
     halfW: entry.halfW,
     floorY: entry.floorY,
     ceilingY: entry.ceilingY,
+    hasUpperFloor: !!entry.hasUpperFloor,
+    upperFloorY: entry.upperFloorY ?? null,
+    upperCeilingY: entry.upperCeilingY ?? null,
+    stair: entry.stair || null,
+    stairwell: entry.stairwell || null,
   });
   if (Array.isArray(entry.wallColliders)) {
     for (const wc of entry.wallColliders) state.wallColliders.push(wc);
@@ -1911,12 +2473,12 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
       roofH = 2.15;
       isHip = b.cidx % 5 === 0;
     } else if (b.style === 'splitlevel') {
-      upperH = 1.85;
+      upperH = 2.40;
       roofH = 1.75;
       isHip = b.cidx % 3 === 1;
     } else if (b.style === 'cottage_1_5s') {
-      upperH = 1.15;
-      roofH = 2.30;
+      upperH = 2.30;
+      roofH = 2.20;
     } else if (b.style === 'bungalow_brick') {
       roofH = 1.75;
       isHip = b.cidx % 3 === 0;
@@ -1964,7 +2526,7 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
     shell.group.rotation.y = -ang;
     rootGroup.add(shell.group);
 
-    // Populate furnished interior & animated residents
+    // Populate furnished ground-floor interior & animated residents (keeping staircase clear if 2-storey!)
     const interior = populateHouseInterior(shell.group, {
       w,
       d,
@@ -1974,9 +2536,26 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
       style: b.style,
       frontDoorZ: shell.frontDoorZ,
       backDoorZ: shell.backDoorZ,
+      stairSide: shell.stairSide,
+      stairwell: shell.stairwell,
       isGarage,
       texLib,
     });
+
+    // Populate furnished 2nd floor (bedrooms, home office, bathroom, warm lights, animated resident) for 2-storey homes!
+    let upperInterior = null;
+    if (shell.hasUpperFloor) {
+      upperInterior = populateUpperFloor(shell.group, {
+        w,
+        d,
+        upperFloorY: shell.upperFloorY,
+        upperH,
+        seed,
+        stairSide: shell.stairSide,
+        stairwell: shell.stairwell,
+        texLib,
+      });
+    }
 
     // Populate detailed Fleurimont backyard (skip for standalone garage)
     if (!isGarage) {
@@ -1997,6 +2576,14 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
         ? `Maison ${b.street}`
         : `Résidence #${b.id}`;
 
+    const worldStair = shell.stair
+      ? {
+          ...shell.stair,
+          y0: elev + shell.stair.y0,
+          y1: elev + shell.stair.y1,
+        }
+      : null;
+
     state.enterableIds.add(b.id);
     state.enterableBuildings.push({
       id: b.id,
@@ -2010,12 +2597,21 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
       halfW: w * 0.5,
       floorY: elev + localFloorY,
       ceilingY: elev + localFloorY + groundH,
+      hasUpperFloor: shell.hasUpperFloor,
+      upperFloorY: shell.hasUpperFloor ? elev + shell.upperFloorY : null,
+      upperCeilingY: shell.hasUpperFloor ? elev + shell.upperCeilingY : null,
+      stair: worldStair,
+      stairwell: shell.stairwell,
     });
 
     for (const wc of shell.wallColliders) state.wallColliders.push(wc);
     for (const dr of shell.doors) state.doors.push(dr);
     for (const r of interior.residents) state.residents.push(r);
     for (const tv of interior.tvScreens) state.tvScreens.push(tv);
+    if (upperInterior) {
+      for (const r of upperInterior.residents) state.residents.push(r);
+      for (const tv of upperInterior.tvScreens) state.tvScreens.push(tv);
+    }
     state.christmasGroups.push(shell.christmasGroup, interior.christmasGroup);
     state.pickableMeshes.push(shell.group);
   }
@@ -2067,6 +2663,12 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
         r.headPivot.rotation.y = Math.sin(t * 1.5) * 0.28;
         r.rightArmPivot.rotation.z = 0.65 + Math.sin(t * 2.6) * 0.22;
         r.leftArmPivot.rotation.z = 0.45;
+      } else if (r.activity === 'desk') {
+        // Typing at home office desk & glancing at glowing monitor
+        r.headPivot.rotation.y = Math.sin(t * 0.85) * 0.16;
+        r.headPivot.rotation.z = -0.06 + Math.sin(t * 1.6) * 0.04;
+        r.rightArmPivot.rotation.z = 0.88 + Math.sin(t * 6.5) * 0.08;
+        r.leftArmPivot.rotation.z = 0.88 + Math.cos(t * 6.2) * 0.08;
       } else if (r.activity === 'walk') {
         // Gentle ping-pong stroll between living room & dining/kitchen
         const span = (r.maxX - r.minX) * 0.5;
@@ -2103,6 +2705,11 @@ export function buildEnterable100mZone(scene, DATA, texLib, elevData = null) {
     assets.tileFloorMat.emissiveIntensity = isNight ? 0.38 : 0.12;
     assets.pendantBulbMat.emissiveIntensity = isNight ? 2.2 : 0.95;
     assets.lampShadeMat.emissiveIntensity = isNight ? 1.75 : 0.75;
+    assets.bedSheetMat.emissiveIntensity = isNight ? 0.30 : 0.08;
+    assets.porcelainMat.emissiveIntensity = isNight ? 0.28 : 0.08;
+    for (const dm of assets.duvetMats) {
+      dm.emissiveIntensity = isNight ? 0.26 : 0.08;
+    }
 
     // Upper 2nd-floor windows glow warmly at Night
     if (isNight) {

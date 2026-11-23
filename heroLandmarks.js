@@ -13,6 +13,7 @@ import {
 import {
   createHollowShell,
   populateHouseInterior,
+  populateUpperFloor,
   populateDetailedBackyard,
   registerExternalEnterable,
 } from './interiors.js';
@@ -761,17 +762,18 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   root.add(foundation);
 
   // Main 2-storey white horizontal vinyl cottage mass:
-  // Ground floor (y=0.42..3.15) is HOLLOW & ENTERABLE with see-through windows & auto-opening front/back doors!
+  // BOTH 1st floor (y=0.42..3.15) AND 2nd floor (y=3.29..5.72) are HOLLOW & ENTERABLE with wooden staircase & see-through windows!
   const mainH = 5.3;
   const groundH2646 = 2.73;
-  const upperH2646 = mainH - groundH2646;
+  const upperH2646 = mainH - groundH2646 - 0.14; // 2.43m -> upperCeilingY = 5.72m flush with mainRoof
   const [wCx2646, wCz2646] = localOffsetToWorld(b2646.obbCx, b2646.obbCz, b2646.ang, 0, -1.7);
   const shell2646 = createHollowShell({
     d: 8.5,
     w: 9.5,
     floorY: 0.42,
     groundH: groundH2646,
-    upperH: 0,
+    upperH: upperH2646,
+    stairSide: -1,
     includeRoof: false,
     includeFoundation: false,
     includeFrontSteps: false,
@@ -793,7 +795,16 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
       ],
       posZ: [{ x: -1.8, w: 1.5, yBottom: 1.12, h: 1.42 }],
     },
+    upperFrontWindows: [
+      { z: 2.95, w: 1.55, yBottom: 3.68, h: 1.35 }, // above front portico at z = 1.25
+      { z: -2.5, w: 2.05, yBottom: 3.68, h: 1.35 }, // into 2nd-floor front bay at z = -4.2
+    ],
+    upperBackWindows: [
+      { z: -1.8, w: 1.85, yBottom: 3.72, h: 1.32 },
+      { z: 2.0, w: 1.85, yBottom: 3.72, h: 1.32 },
+    ],
     exteriorMat: whiteSiding,
+    upperExteriorMat: whiteSiding,
     trimMat,
     seed: 2646,
     texLib,
@@ -811,6 +822,18 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     style: 'cottage_2s',
     frontDoorZ: 2.95,
     backDoorZ: -0.5,
+    stairSide: shell2646.stairSide,
+    stairwell: shell2646.stairwell,
+    texLib,
+  });
+  const up2646 = populateUpperFloor(shell2646.group, {
+    w: 9.5,
+    d: 8.5,
+    upperFloorY: shell2646.upperFloorY,
+    upperH: upperH2646,
+    seed: 2646,
+    stairSide: shell2646.stairSide,
+    stairwell: shell2646.stairwell,
     texLib,
   });
 
@@ -826,20 +849,20 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     halfW: 4.75,
     floorY: elev + 0.42,
     ceilingY: elev + 0.42 + groundH2646,
+    hasUpperFloor: shell2646.hasUpperFloor,
+    upperFloorY: elev + shell2646.upperFloorY,
+    upperCeilingY: elev + shell2646.upperCeilingY,
+    stair: shell2646.stair
+      ? { ...shell2646.stair, y0: elev + shell2646.stair.y0, y1: elev + shell2646.stair.y1 }
+      : null,
+    stairwell: shell2646.stairwell,
     wallColliders: shell2646.wallColliders,
     doors: shell2646.doors,
-    residents: int2646.residents,
-    tvScreens: int2646.tvScreens,
-    interiorLights: int2646.interiorLights,
+    residents: [...int2646.residents, ...up2646.residents],
+    tvScreens: [...int2646.tvScreens, ...up2646.tvScreens],
+    interiorLights: [...int2646.interiorLights, ...up2646.interiorLights],
     christmasGroups: [shell2646.christmasGroup, int2646.christmasGroup],
   });
-
-  // 2nd-storey white vinyl cottage mass above hollow ground floor
-  const upperBody2646 = makeWorldBox(8.5, upperH2646, 9.5, whiteSiding);
-  upperBody2646.position.set(0, 0.42 + groundH2646 + upperH2646 / 2, -1.7);
-  upperBody2646.castShadow = true;
-  upperBody2646.receiveShadow = true;
-  root.add(upperBody2646);
 
   // Side-gable main roof + white fascia & rake trim
   const mainRoofH = 2.45;
@@ -872,35 +895,71 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   root.add(chim2646, chim2646Cap, chim2646Flue);
   registerHeroChimney(scene, root, -1.2, 9.08, -4.4);
 
-  // Right (North, -Z) projecting 2-storey front-gabled bay (hollow 1st floor w/ see-through bay window!)
+  // Right (North, -Z) projecting 2-storey front-gabled bay (BOTH 1st & 2nd floors are hollow w/ see-through windows!)
   const bayD = 2.0;
   const bayW = 4.3;
   const bayZ = -4.2;
   const bayX = 4.1;
-  const bayBodyUpper = makeWorldBox(bayD, upperH2646, bayW, whiteSiding);
-  bayBodyUpper.position.set(bayX, 0.42 + groundH2646 + upperH2646 / 2, bayZ);
-  bayBodyUpper.castShadow = true;
-  root.add(bayBodyUpper);
+  const heroClearGlassMat = new THREE.MeshStandardMaterial({
+    color: 0xaad0e6,
+    roughness: 0.08,
+    metalness: 0.22,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
 
   // Hollow 1st-floor bay projection cheeks + knee-wall + header + piers framing the wide see-through bay window
-  const bayCheekL = makeWorldBox(0.88, groundH2646, 0.24, whiteSiding);
-  bayCheekL.position.set(4.68, 0.42 + groundH2646 / 2, bayZ - bayW * 0.5 + 0.12);
-  const bayCheekR = makeWorldBox(0.88, groundH2646, 0.24, whiteSiding);
-  bayCheekR.position.set(4.68, 0.42 + groundH2646 / 2, bayZ + bayW * 0.5 - 0.12);
+  const bayCheekL = makeWorldBox(0.88, mainH, 0.24, whiteSiding);
+  bayCheekL.position.set(4.68, 0.42 + mainH / 2, bayZ - bayW * 0.5 + 0.12);
+  const bayCheekR = makeWorldBox(0.88, mainH, 0.24, whiteSiding);
+  bayCheekR.position.set(4.68, 0.42 + mainH / 2, bayZ + bayW * 0.5 - 0.12);
   const bayApron = makeWorldBox(0.22, 0.66, bayW, whiteSiding);
   bayApron.position.set(4.99, 0.42 + 0.33, bayZ);
-  const bayHeader = makeWorldBox(0.22, 0.50, bayW, whiteSiding);
-  bayHeader.position.set(4.99, 2.90, bayZ);
+  const bayMidBand = makeWorldBox(0.22, 1.04, bayW, whiteSiding);
+  bayMidBand.position.set(4.99, 2.65 + 0.52, bayZ);
+  const bayTopHeader = makeWorldBox(0.22, 0.69, bayW, whiteSiding);
+  bayTopHeader.position.set(4.99, 5.03 + 0.345, bayZ);
   const bayPierL = makeWorldBox(0.22, 1.57, 0.90, whiteSiding);
   bayPierL.position.set(4.99, 1.86, bayZ - 1.70);
   const bayPierR = makeWorldBox(0.22, 1.57, 0.90, whiteSiding);
   bayPierR.position.set(4.99, 1.86, bayZ + 1.70);
+  // 2nd-floor bay piers flanking the 1.8m see-through master-bedroom window
+  const bayUpPierL = makeWorldBox(0.22, 1.35, 1.25, whiteSiding);
+  bayUpPierL.position.set(4.99, 4.355, bayZ - 1.525);
+  const bayUpPierR = makeWorldBox(0.22, 1.35, 1.25, whiteSiding);
+  bayUpPierR.position.set(4.99, 4.355, bayZ + 1.525);
   const bayFloorExt = new THREE.Mesh(
     new THREE.BoxGeometry(0.92, 0.12, bayW - 0.48),
     new THREE.MeshStandardMaterial({ color: 0xba8b54, roughness: 0.7 })
   );
   bayFloorExt.position.set(4.66, 0.38, bayZ);
-  root.add(bayCheekL, bayCheekR, bayApron, bayHeader, bayPierL, bayPierR, bayFloorExt);
+  const bayUpFloorExt = new THREE.Mesh(
+    new THREE.BoxGeometry(0.92, 0.14, bayW - 0.48),
+    new THREE.MeshStandardMaterial({ color: 0xba8b54, roughness: 0.7 })
+  );
+  bayUpFloorExt.position.set(4.66, 3.22, bayZ);
+  // 2nd-floor bay see-through window glass + white trim + louvered shutters
+  const bayUpGlass = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.35, 1.80), heroClearGlassMat);
+  bayUpGlass.position.set(5.06, 4.355, bayZ);
+  const bayUpSill = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 1.98), trimMat);
+  bayUpSill.position.set(5.10, 3.66, bayZ);
+  const bayUpHead = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.08, 1.96), trimMat);
+  bayUpHead.position.set(5.10, 5.05, bayZ);
+  root.add(
+    bayCheekL, bayCheekR, bayApron, bayMidBand, bayTopHeader,
+    bayPierL, bayPierR, bayUpPierL, bayUpPierR,
+    bayFloorExt, bayUpFloorExt, bayUpGlass, bayUpSill, bayUpHead
+  );
+  for (const sgn of [-1, 1]) {
+    // Shutters flanking 2nd-floor bay window & right front 2nd-floor window
+    const shBay = new THREE.Mesh(new THREE.BoxGeometry(0.10, 1.45, 0.40), taupeMat);
+    shBay.position.set(5.12, 4.355, bayZ + sgn * 1.12);
+    const shRight = new THREE.Mesh(new THREE.BoxGeometry(0.10, 1.45, 0.40), taupeMat);
+    shRight.position.set(4.28, 4.355, 1.25 + sgn * 1.00);
+    root.add(shBay, shRight);
+  }
 
   const bayRoof = new THREE.Mesh(createPitchedRoofGeometry(bayW, bayD + 1.8, 1.55, false, 0.32), shingleMat);
   bayRoof.rotation.y = Math.PI / 2;
@@ -939,21 +998,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     parent.add(wg);
   };
 
-  // 2nd storey front windows + rear 2nd-storey window (1st-floor windows are real see-through cutouts!)
-  addWindow(root, bayX + bayD * 0.5, 4.35, bayZ, 1.75, 1.35, true);
-  addWindow(root, 4.28, 4.35, 1.25, 1.5, 1.35, true);
-  addWindow(root, -4.28, 4.35, -3.5, 1.4, 1.2, false);
-
   // Projecting 3-pane SEE-THROUGH Bay Window on 1st floor of front bay (x = 5.10, y = 1.85, z = bayZ)
-  const heroClearGlassMat = new THREE.MeshStandardMaterial({
-    color: 0xaad0e6,
-    roughness: 0.08,
-    metalness: 0.22,
-    transparent: true,
-    opacity: 0.22,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
   const bayWinX = bayX + bayD * 0.5;
   const bayFrameBase = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 2.52), trimMat);
   bayFrameBase.position.set(bayWinX + 0.16, 1.04, bayZ);
@@ -1433,15 +1478,17 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   f2638B.position.set(-1.15, -0.5, 3.35);
   g2638.add(f2638A, f2638B);
 
-  // North 2-storey projecting mass (x: -4.53..4.54, z: -5.35..1.35): HOLLOW enterable ground floor + 2nd storey
-  const groundH2638 = 2.65;
+  // North 2-storey projecting mass (x: -4.53..4.54, z: -5.35..1.35): HOLLOW 1st & 2nd floors + wooden stairs!
+  const groundH2638 = 2.55;
+  const upperH2638 = 2.16; // upperFloorY = 3.14, upperCeilingY = 5.30
   const [wCx2638, wCz2638] = localOffsetToWorld(rec2638.obbCx, rec2638.obbCz, rec2638.ang, 0.0, -2.0);
   const shell2638 = createHollowShell({
     d: 9.07,
     w: 6.70,
     floorY: 0.45,
     groundH: groundH2638,
-    upperH: 0,
+    upperH: upperH2638,
+    stairSide: -1,
     includeRoof: false,
     includeFoundation: false,
     includeFrontSteps: true,
@@ -1451,8 +1498,13 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     backDoorZ: 0.35,
     backDoorW: 1.80,
     backDoorH: 2.18,
-    frontWindows: [{ z: -1.1, w: 2.35, yBottom: 1.08, h: 1.42 }],
+    frontWindows: [{ z: -1.1, w: 2.35, yBottom: 1.08, h: 1.38 }],
+    upperFrontWindows: [
+      { z: -1.4, w: 1.35, yBottom: 3.55, h: 1.25 },
+      { z: 1.6, w: 1.45, yBottom: 3.55, h: 1.25 },
+    ],
     exteriorMat: blueGreySiding,
+    upperExteriorMat: blueGreySiding,
     trimMat,
     seed: 2638,
     texLib,
@@ -1470,6 +1522,18 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     style: 'cottage_2s',
     frontDoorZ: 1.85,
     backDoorZ: 0.35,
+    stairSide: shell2638.stairSide,
+    stairwell: shell2638.stairwell,
+    texLib,
+  });
+  const up2638 = populateUpperFloor(shell2638.group, {
+    w: 6.70,
+    d: 9.07,
+    upperFloorY: shell2638.upperFloorY,
+    upperH: upperH2638,
+    seed: 2638,
+    stairSide: shell2638.stairSide,
+    stairwell: shell2638.stairwell,
     texLib,
   });
   const back2638 = populateDetailedBackyard(shell2638.group, {
@@ -1492,29 +1556,32 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     halfW: 6.70 * 0.5,
     floorY: elev2638 + 0.45,
     ceilingY: elev2638 + 0.45 + groundH2638,
+    hasUpperFloor: shell2638.hasUpperFloor,
+    upperFloorY: elev2638 + shell2638.upperFloorY,
+    upperCeilingY: elev2638 + shell2638.upperCeilingY,
+    stair: shell2638.stair
+      ? { ...shell2638.stair, y0: elev2638 + shell2638.stair.y0, y1: elev2638 + shell2638.stair.y1 }
+      : null,
+    stairwell: shell2638.stairwell,
     wallColliders: shell2638.wallColliders,
     doors: shell2638.doors,
-    residents: int2638.residents,
-    tvScreens: int2638.tvScreens,
-    interiorLights: int2638.interiorLights,
+    residents: [...int2638.residents, ...up2638.residents],
+    tvScreens: [...int2638.tvScreens, ...up2638.tvScreens],
+    interiorLights: [...int2638.interiorLights, ...up2638.interiorLights],
     christmasGroups: [shell2638.christmasGroup, int2638.christmasGroup, back2638.christmasGroup],
   });
 
-  const upper2638 = makeWorldBox(9.07, 1.90, 6.70, blueGreySiding);
-  upper2638.position.set(0.0, 3.10 + 0.95, -2.0);
-  upper2638.castShadow = true;
-  upper2638.receiveShadow = true;
   const roof2638 = new THREE.Mesh(createPitchedRoofGeometry(9.07, 6.70, 2.35, false, 0.35), darkShingleMat);
-  roof2638.position.set(0.0, 5.0, -2.0);
+  roof2638.position.set(0.0, 5.30, -2.0);
   roof2638.castShadow = true;
   const trim2638 = new THREE.Mesh(createRoofTrimGeometry(9.07, 6.70, 2.35, false, 0.35), trimMat);
   trim2638.position.copy(roof2638.position);
   const gables2638 = new THREE.Mesh(createGableEndsGeometry(9.07, 6.70, 2.35), blueGreySiding);
   gables2638.position.copy(roof2638.position);
   const chim2638 = makeWorldBox(0.75, 1.85, 0.75, darkTrimMat);
-  chim2638.position.set(0.8, 6.65, -4.4);
-  g2638.add(upper2638, roof2638, trim2638, gables2638, chim2638);
-  registerHeroChimney(scene, g2638, 0.8, 7.65, -4.4);
+  chim2638.position.set(0.8, 6.95, -4.4);
+  g2638.add(roof2638, trim2638, gables2638, chim2638);
+  registerHeroChimney(scene, g2638, 0.8, 7.95, -4.4);
 
   // South recessed wing + open carport/garage bay + sweeping sloped roof + shed dormer
   const southWall2638 = makeWorldBox(6.73, 2.85, 4.0, blueGreySiding);
@@ -1533,14 +1600,12 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   dormerRoof2638.position.set(1.25, 5.42, 3.15);
   g2638.add(southWall2638, garageBay2638, sweepSlope2638, dormerBody2638, dormerRoof2638);
 
-  // Corner boards & 2nd-storey windows on 2638 (1st-floor window is real see-through cutout!)
+  // Corner boards & dormer window on 2638 (1st & 2nd-floor main windows are real see-through cutouts!)
   for (const cz of [-5.28, 1.28]) {
-    const cornerB = new THREE.Mesh(new THREE.BoxGeometry(0.16, 4.6, 0.18), blueGreyTrimMat);
-    cornerB.position.set(4.52, 2.75, cz);
+    const cornerB = new THREE.Mesh(new THREE.BoxGeometry(0.16, 4.9, 0.18), blueGreyTrimMat);
+    cornerB.position.set(4.52, 2.90, cz);
     g2638.add(cornerB);
   }
-  addWindow(g2638, 4.55, 3.85, -3.4, 1.35, 1.25, false);
-  addWindow(g2638, 4.55, 3.85, -0.4, 1.45, 1.25, false);
   addWindow(g2638, 2.52, 4.75, 3.15, 1.15, 0.82, false);
   // Trash bins & curved front cedar hedge (leaving front entry walkway open) + red wheelbarrow
   for (const tz of [4.85, 5.5]) {
@@ -2023,15 +2088,17 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   f387B.position.set(1.45, -0.5, -5.75);
   g387.add(f387A, f387B);
 
-  // Hollow enterable ground-floor quadruplex unit (y=0.45..3.20) + 2nd-floor brick band (y=3.20..5.35)
-  const groundH387 = 2.75;
+  // Hollow enterable 1st & 2nd-floor quadruplex units (y=0.45..5.35) + wooden stairs!
+  const groundH387 = 2.65;
+  const upperH387 = 2.11; // upperFloorY = 3.24, upperCeilingY = 5.35 flush with vinylTopA
   const [wCx387, wCz387] = localOffsetToWorld(rec387.obbCx, rec387.obbCz, rec387.ang, 0.0, 1.95);
   const shell387 = createHollowShell({
     d: 11.6,
     w: 11.5,
     floorY: 0.45,
     groundH: groundH387,
-    upperH: 0,
+    upperH: upperH387,
+    stairSide: -1,
     includeRoof: false,
     includeFoundation: false,
     includeFrontSteps: true,
@@ -2053,7 +2120,21 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
       ],
       negZ: [{ x: -1.5, w: 1.8, yBottom: 1.15, h: 1.42 }],
     },
+    upperFrontWindows: [
+      { z: -3.15, w: 1.45, yBottom: 3.55, h: 1.3 },
+      { z: 0.45, w: 1.45, yBottom: 3.55, h: 1.3 },
+      { z: 3.25, w: 1.45, yBottom: 3.55, h: 1.3 },
+    ],
+    upperSideWindows: {
+      posZ: [
+        { x: -3.4, w: 1.45, yBottom: 3.55, h: 1.3 },
+        { x: 0.0, w: 1.45, yBottom: 3.55, h: 1.3 },
+        { x: 3.4, w: 1.45, yBottom: 3.55, h: 1.3 },
+      ],
+      negZ: [{ x: -1.5, w: 1.5, yBottom: 3.55, h: 1.3 }],
+    },
     exteriorMat: redBrickMat,
+    upperExteriorMat: redBrickMat,
     trimMat: forestTrimMat,
     seed: 387,
     texLib,
@@ -2071,6 +2152,18 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     style: 'quadruplex',
     frontDoorZ: 1.5,
     backDoorZ: 2.85,
+    stairSide: shell387.stairSide,
+    stairwell: shell387.stairwell,
+    texLib,
+  });
+  const up387 = populateUpperFloor(shell387.group, {
+    w: 11.5,
+    d: 11.6,
+    upperFloorY: shell387.upperFloorY,
+    upperH: upperH387,
+    seed: 387,
+    stairSide: shell387.stairSide,
+    stairwell: shell387.stairwell,
     texLib,
   });
   const back387 = populateDetailedBackyard(shell387.group, {
@@ -2094,18 +2187,21 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
     halfW: 11.5 * 0.5,
     floorY: elev387 + 0.45,
     ceilingY: elev387 + 0.45 + groundH387,
+    hasUpperFloor: shell387.hasUpperFloor,
+    upperFloorY: elev387 + shell387.upperFloorY,
+    upperCeilingY: elev387 + shell387.upperCeilingY,
+    stair: shell387.stair
+      ? { ...shell387.stair, y0: elev387 + shell387.stair.y0, y1: elev387 + shell387.stair.y1 }
+      : null,
+    stairwell: shell387.stairwell,
     wallColliders: shell387.wallColliders,
     doors: shell387.doors,
-    residents: int387.residents,
-    tvScreens: int387.tvScreens,
-    interiorLights: int387.interiorLights,
+    residents: [...int387.residents, ...up387.residents],
+    tvScreens: [...int387.tvScreens, ...up387.tvScreens],
+    interiorLights: [...int387.interiorLights, ...up387.interiorLights],
     christmasGroups: [shell387.christmasGroup, int387.christmasGroup, back387.christmasGroup],
   });
 
-  const brickUpperA = makeWorldBox(11.6, 2.15, 11.5, redBrickMat, 1.8);
-  brickUpperA.position.set(0.0, 3.20 + 1.075, 1.95);
-  brickUpperA.castShadow = true;
-  brickUpperA.receiveShadow = true;
   const brickLowerB = makeWorldBox(8.7, 4.9, 3.9, redBrickMat, 1.8);
   brickLowerB.position.set(1.45, 0.45 + 2.45, -5.75);
   brickLowerB.castShadow = true;
@@ -2116,7 +2212,7 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   const vinylTopB = makeWorldBox(8.7, 2.5, 3.9, whiteSiding);
   vinylTopB.position.set(1.45, 5.35 + 1.25, -5.75);
   vinylTopB.castShadow = true;
-  g387.add(brickUpperA, brickLowerB, vinylTopA, vinylTopB);
+  g387.add(brickLowerB, vinylTopA, vinylTopB);
 
   // Moss-grey hip roofs + white eave fascia + South & East white front pediment gables
   const hipRoofA = new THREE.Mesh(createPitchedRoofGeometry(11.6, 11.5, 2.45, true, 0.42), mossShingleMat);
@@ -2148,12 +2244,11 @@ export function buildHero2646Cormiers(scene, texLib, b2646, elevDataArg = null) 
   };
   for (const wx of [-3.4, 0.0, 3.4]) {
     addQuadWin(wx, 6.6, 7.72, 1.45, 1.3, -Math.PI / 2);
-    addQuadWin(wx, 4.05, 7.72, 1.35, 1.3, -Math.PI / 2);
   }
   for (const ez of [-4.6, -1.2, 2.4, 5.2]) {
     addQuadWin(5.82, 6.6, ez, 1.35, 1.3, 0);
-    addQuadWin(5.82, 3.85, ez, 1.35, 1.3, 0);
   }
+  addQuadWin(5.82, 3.85, -4.6, 1.35, 1.3, 0);
 
   // Stacked SW Corner Balconies (x: -7.5..-5.8, z: 2.6..7.4) with brick pier & white railings
   const pier387 = makeWorldBox(0.62, 5.65, 0.62, redBrickMat);
